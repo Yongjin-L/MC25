@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template_string, session, jsonify, request, redirect, url_for
+from flask import Flask, render_template_string, session, jsonify
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key_here'
@@ -9,7 +9,7 @@ HTML_PAGE = """
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Local TF.js Model Loader with Real Inference</title>
+  <title>MC25 KIN217 with Mr. Lee</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -27,13 +27,9 @@ HTML_PAGE = """
     #camera {
       background: #333;
     }
-    #overlay {
-      position: absolute;
-      top: 10px; 
-      left: 10px;
-      color: #fff; 
-      font-weight: bold; 
-      text-shadow: 1px 1px #000;
+    .video-container {
+      display: inline-block; 
+      position: relative;
     }
     #countdown {
       position: absolute;
@@ -44,14 +40,17 @@ HTML_PAGE = """
       font-weight: bold;
       text-shadow: 1px 1px #000;
     }
-    .video-container {
-      display: inline-block; 
-      position: relative;
+    #overlay {
+      position: absolute;
+      top: 50px; 
+      left: 10px;
+      color: #fff; 
+      font-weight: bold; 
+      text-shadow: 1px 1px #000;
     }
     #modelStatus {
-      color: red; 
-      font-weight: bold; 
-      margin-bottom: 10px;
+      margin-top: 10px;
+      font-weight: bold;
     }
     #summaryContainer {
       margin-top: 30px;
@@ -65,14 +64,12 @@ HTML_PAGE = """
 </head>
 
 <body>
-  <h1>Local TF.js Model Loader + Real Predictions</h1>
+  <h1>MC25 KIN217 with Mr. Lee</h1>
 
-  <!-- 1) Model Files (JSON + BIN) -->
-  <div>
-    <label><strong>Upload your model.json and .bin:</strong></label><br/>
-    <input type="file" id="modelFiles" multiple accept=".json,.bin" />
-  </div>
-  <div id="modelStatus"></div>
+  <!-- 1) Upload THREE files: metadata.js, model.js, weights.bin -->
+  <p><strong>Upload your metadata.js, model.js, and weights.bin:</strong></p>
+  <input type="file" id="modelFiles" multiple accept=".js,.bin" />
+  <div id="modelStatus" style="color:red;"></div>
 
   <!-- 2) Buttons to open camera / start / stop -->
   <button class="btn" id="openCameraButton">Open Camera</button>
@@ -88,7 +85,7 @@ HTML_PAGE = """
   </div>
   <br/>
 
-  <!-- 4) Optional: Summary Container (hidden until stop) -->
+  <!-- 4) Task Summary (hidden until stop) -->
   <div id="summaryContainer" style="display:none;">
     <h2>Task Summary</h2>
     <div id="summaryContent"></div>
@@ -96,13 +93,8 @@ HTML_PAGE = """
 
   <!-- Load TensorFlow.js -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-  <!-- 
-    If your model requires specific TF.js converters or additional libs,
-    import them here as well.
-  -->
 
   <script>
-    // HTML Elements
     const modelFilesInput = document.getElementById('modelFiles');
     const modelStatus = document.getElementById('modelStatus');
     const openCameraButton = document.getElementById('openCameraButton');
@@ -114,21 +106,88 @@ HTML_PAGE = """
     const summaryContainer = document.getElementById('summaryContainer');
     const summaryContent = document.getElementById('summaryContent');
 
-    // Variables
-    let model = null;
     let selectedFiles = [];
-    let countdownInterval = null;
+    let metadata = null;    // Will store parsed class labels
+    let model = null;       // tf.Model or tf.GraphModel
     let inferenceInterval = null;
-    let timeCounter = 0;           // total time in seconds while task is running
-    let classStats = {};          // { className: { seconds: 0, sumConfidence: 0, count: 0 } }
+    let countdownInterval = null;
+    let timeCounter = 0;    // in seconds
+    let classStats = {};    // { className: { seconds: 0, sumConfidence: 0, count: 0 } }
 
-    // 1) Selecting local model files
     modelFilesInput.addEventListener('change', (evt) => {
-      selectedFiles = Array.from(evt.target.files); 
-      console.log("Selected files:", selectedFiles);
-      modelStatus.textContent = "Model files selected. (Not yet loaded)";
-      modelStatus.style.color = "blue";
+      selectedFiles = Array.from(evt.target.files);
+      modelStatus.textContent = "Files selected. Parsing...";
+      modelStatus.style.color = "orange";
     });
+
+    // 1) Parse metadata.js, load model.js + weights.bin
+    // We'll do this right before Start Task, if not already loaded.
+    async function loadAllFiles(files) {
+      // We expect exactly 3 files:
+      // 1) metadata.js  2) model.js  3) weights.bin
+      // Let's identify them by filename or extension
+      let metaFile = null;
+      let modelFile = null;
+      let weightFile = null;
+
+      for (const f of files) {
+        const fname = f.name.toLowerCase();
+        if (fname.endsWith("metadata.js")) {
+          metaFile = f;
+        } else if (fname.endsWith("model.js")) {
+          modelFile = f;
+        } else if (fname.endsWith(".bin")) {
+          weightFile = f;
+        }
+      }
+
+      if (!metaFile || !modelFile || !weightFile) {
+        throw new Error("Please select metadata.js, model.js, and weights.bin!");
+      }
+
+      // 1.1) Parse metadata.js for class labels
+      metadata = await parseMetadataFile(metaFile);
+
+      // 1.2) Load model (model.js + weights.bin) via tf.io.browserFiles
+      // Note: We pass these 2 files to tf.io.browserFiles
+      const modelAndWeightsFiles = [modelFile, weightFile];
+      try {
+        // Attempt graph model first
+        const gModel = await tf.loadGraphModel(tf.io.browserFiles(modelAndWeightsFiles));
+        return gModel;
+      } catch (gErr) {
+        console.warn("Graph model load failed, trying layers model...", gErr);
+        // Then try layers model
+        try {
+          const lModel = await tf.loadLayersModel(tf.io.browserFiles(modelAndWeightsFiles));
+          return lModel;
+        } catch (lErr) {
+          console.error("Both graph & layers model load failed:", lErr);
+          throw lErr;
+        }
+      }
+    }
+
+    // Parse the metadata.js file content (which we assume is JSON)
+    function parseMetadataFile(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          try {
+            const text = evt.target.result;
+            // parse it as JSON
+            const json = JSON.parse(text);
+            resolve(json);
+          } catch (err) {
+            reject(err);
+          }
+        };
+        reader.onerror = (err) => {
+          reject(err);
+        };
+        reader.readAsText(file);
+      });
+    }
 
     // 2) Open camera
     openCameraButton.addEventListener('click', async () => {
@@ -141,24 +200,24 @@ HTML_PAGE = """
       }
     });
 
-    // 3) Start Task (with 5-second countdown, then real inference)
+    // 3) Start Task with 5-second countdown
     startTaskButton.addEventListener('click', async () => {
-      // If model not loaded yet, attempt to load
+      // If model not loaded yet, load
       if (!model) {
-        if (!selectedFiles || selectedFiles.length === 0) {
-          alert("Please select your model.json and .bin files first!");
+        if (!selectedFiles || selectedFiles.length < 3) {
+          alert("Please select metadata.js, model.js, and weights.bin first!");
           return;
         }
         try {
-          modelStatus.textContent = "Loading model...";
+          modelStatus.textContent = "Loading files...";
           modelStatus.style.color = "orange";
-          model = await loadLocalModel(selectedFiles);
+          model = await loadAllFiles(selectedFiles);
           modelStatus.textContent = "Model loaded successfully!";
           modelStatus.style.color = "green";
         } catch (err) {
-          console.error("Model loading error:", err);
-          modelStatus.textContent = "Error loading model!";
+          modelStatus.textContent = "Error loading model files!";
           modelStatus.style.color = "red";
+          console.error(err);
           return;
         }
       }
@@ -167,9 +226,8 @@ HTML_PAGE = """
       timeCounter = 0;
       classStats = {};
       overlayElem.textContent = "";
-      summaryContainer.style.display = "none"; // hide summary if previously shown
+      summaryContainer.style.display = "none";
 
-      // 5-second countdown
       let countdownVal = 5;
       countdownElem.textContent = countdownVal;
       startTaskButton.disabled = true;
@@ -198,31 +256,27 @@ HTML_PAGE = """
       stopTaskButton.disabled = true;
       overlayElem.textContent = "";
 
-      // Show summary
       showSummary();
     });
 
-    // --- REAL INFERENCE LOGIC EVERY 1 SECOND ---
+    // Real inference each second
     async function startInference() {
       inferenceInterval = setInterval(async () => {
         timeCounter++;
 
-        // 1) Capture current video frame as a tensor
+        // Capture frame
         const inputTensor = tf.browser.fromPixels(camera);
-        // For Teachable Machine models, you often need to resize / normalize
-        // Adjust these steps to your model's expected input shape.
+        // Resize if needed (depends on your model)
         const resized = tf.image.resizeBilinear(inputTensor, [224, 224]);
+        // Normalize if needed
         const normalized = resized.div(255);
         const batched = normalized.expandDims(0);
 
-        // 2) Predict
-        // If your model is a layers model with "predict":
+        // Predict
         const predictions = model.predict(batched);
-        // predictions shape might be [1, NCLASSES]
-        
-        // 3) Get top class and confidence
         const data = await predictions.data();
-        // e.g., data might be [0.1, 0.7, 0.2] for 3 classes
+
+        // Identify top class
         let bestIndex = 0;
         let bestScore = data[0];
         for (let i = 1; i < data.length; i++) {
@@ -232,79 +286,47 @@ HTML_PAGE = """
           }
         }
         const confidencePercent = (bestScore * 100).toFixed(1);
-        
-        // OPTIONAL: If you know your class labels
-        // Hardcode or fetch from somewhere. 
-        // For example: 
-        const classLabels = ["Class A", "Class B", "Class C"]; 
-        // If your model has more classes, extend it accordingly.
 
-        const predictedClassName = classLabels[bestIndex] || `Class ${bestIndex}`;
+        // If metadata.js has "labels" array
+        let className = `Class ${bestIndex}`;
+        if (metadata && metadata.labels && metadata.labels[bestIndex]) {
+          className = metadata.labels[bestIndex];
+        }
 
-        // 4) Update overlay
         overlayElem.textContent = 
-          `Time: ${timeCounter}s | ${predictedClassName} (${confidencePercent}%)`;
+          `Time: ${timeCounter}s | ${className} (${confidencePercent}%)`;
 
-        // 5) Track stats
-        if (!classStats[predictedClassName]) {
-          classStats[predictedClassName] = {
+        // Track stats
+        if (!classStats[className]) {
+          classStats[className] = {
             seconds: 0,
             sumConfidence: 0,
             count: 0
           };
         }
-        classStats[predictedClassName].seconds++;
-        classStats[predictedClassName].sumConfidence += parseFloat(confidencePercent);
-        classStats[predictedClassName].count++;
+        classStats[className].seconds++;
+        classStats[className].sumConfidence += parseFloat(confidencePercent);
+        classStats[className].count++;
 
         // Cleanup
+        predictions.dispose();
         batched.dispose();
         resized.dispose();
         normalized.dispose();
         inputTensor.dispose();
-        predictions.dispose();
       }, 1000);
     }
 
-    // --- LOADING LOCAL MODEL FILES USING tf.io.browserFiles ---
-    async function loadLocalModel(files) {
-      // Try graph model first
-      try {
-        const gModel = await tf.loadGraphModel(tf.io.browserFiles(files));
-        return gModel;
-      } catch (gErr) {
-        console.warn("Graph model load failed, trying layers model...", gErr);
-        // Then try layers model
-        try {
-          const lModel = await tf.loadLayersModel(tf.io.browserFiles(files));
-          return lModel;
-        } catch (lErr) {
-          console.error("Both graph/layers load failed", lErr);
-          throw lErr;
-        }
-      }
-    }
-
-    // --- SHOW SUMMARY AFTER STOP ---
+    // 5) Show summary
     function showSummary() {
-      // Calculate total time
-      const totalTime = timeCounter; // in seconds
-
-      // Build a summary table or text
+      const totalTime = timeCounter;
       let html = `<p><strong>Total Task Time:</strong> ${totalTime} seconds</p>`;
-      html += "<p><strong>Class-by-Class:</strong></p>";
-      
-      // For each class in classStats
-      for (const className in classStats) {
-        const stats = classStats[className];
-        const avgConfidence = 
-          (stats.sumConfidence / stats.count).toFixed(1) || 0;
-        html += `
-          <p>
-            <strong>${className}</strong>: 
-            ${stats.seconds} s, 
-            Avg Confidence: ${avgConfidence}%
-          </p>`;
+
+      // Each class: Name, average confidence, seconds
+      for (const cname in classStats) {
+        const stats = classStats[cname];
+        const avgConf = (stats.sumConfidence / stats.count).toFixed(1);
+        html += `<p><strong>${cname}</strong>: ${stats.seconds}s, Avg Confidence: ${avgConf}%</p>`;
       }
 
       summaryContent.innerHTML = html;
@@ -319,10 +341,8 @@ HTML_PAGE = """
 def index():
     return render_template_string(HTML_PAGE)
 
-# (Optional) If you want a summary route or other endpoints, add here.
-
 if __name__ == "__main__":
-    # For local testing or deployment on Render (with minor tweaks for the port).
+    # For local or Render deployment
     import sys
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
