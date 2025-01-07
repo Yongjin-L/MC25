@@ -66,9 +66,9 @@ HTML_PAGE = """
 <body>
   <h1>MC25 KIN217 with Mr. Lee</h1>
 
-  <!-- 1) Upload THREE files: metadata.js, model.js, weights.bin -->
-  <p><strong>Upload your metadata.js, model.js, and weights.bin:</strong></p>
-  <input type="file" id="modelFiles" multiple accept=".js,.bin" />
+  <!-- 1) Upload THREE files: metadata.json, model.json, weights.bin -->
+  <p><strong>Upload your metadata.json, model.json, and weights.bin:</strong></p>
+  <input type="file" id="modelFiles" multiple accept=".json,.bin" />
   <div id="modelStatus" style="color:red;"></div>
 
   <!-- 2) Buttons to open camera / start / stop -->
@@ -107,7 +107,7 @@ HTML_PAGE = """
     const summaryContent = document.getElementById('summaryContent');
 
     let selectedFiles = [];
-    let metadata = null;    // Will store parsed class labels
+    let metadata = null;    // Will store parsed class labels (from metadata.json)
     let model = null;       // tf.Model or tf.GraphModel
     let inferenceInterval = null;
     let countdownInterval = null;
@@ -120,11 +120,12 @@ HTML_PAGE = """
       modelStatus.style.color = "orange";
     });
 
-    // 1) Parse metadata.js, load model.js + weights.bin
-    // We'll do this right before Start Task, if not already loaded.
+    // 1) Parse metadata.json, load model.json + weights.bin
     async function loadAllFiles(files) {
       // We expect exactly 3 files:
-      // 1) metadata.js  2) model.js  3) weights.bin
+      // 1) metadata.json
+      // 2) model.json
+      // 3) weights.bin
       // Let's identify them by filename or extension
       let metaFile = null;
       let modelFile = null;
@@ -132,9 +133,9 @@ HTML_PAGE = """
 
       for (const f of files) {
         const fname = f.name.toLowerCase();
-        if (fname.endsWith("metadata.js")) {
+        if (fname.endsWith("metadata.json")) {
           metaFile = f;
-        } else if (fname.endsWith("model.js")) {
+        } else if (fname.endsWith("model.json")) {
           modelFile = f;
         } else if (fname.endsWith(".bin")) {
           weightFile = f;
@@ -142,14 +143,13 @@ HTML_PAGE = """
       }
 
       if (!metaFile || !modelFile || !weightFile) {
-        throw new Error("Please select metadata.js, model.js, and weights.bin!");
+        throw new Error("Please select metadata.json, model.json, and weights.bin!");
       }
 
-      // 1.1) Parse metadata.js for class labels
+      // 1.1) Parse metadata.json for class labels
       metadata = await parseMetadataFile(metaFile);
 
-      // 1.2) Load model (model.js + weights.bin) via tf.io.browserFiles
-      // Note: We pass these 2 files to tf.io.browserFiles
+      // 1.2) Load model (model.json + weights.bin) via tf.io.browserFiles
       const modelAndWeightsFiles = [modelFile, weightFile];
       try {
         // Attempt graph model first
@@ -168,7 +168,7 @@ HTML_PAGE = """
       }
     }
 
-    // Parse the metadata.js file content (which we assume is JSON)
+    // Parse the metadata.json file content
     function parseMetadataFile(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -205,7 +205,7 @@ HTML_PAGE = """
       // If model not loaded yet, load
       if (!model) {
         if (!selectedFiles || selectedFiles.length < 3) {
-          alert("Please select metadata.js, model.js, and weights.bin first!");
+          alert("Please select metadata.json, model.json, and weights.bin first!");
           return;
         }
         try {
@@ -287,7 +287,7 @@ HTML_PAGE = """
         }
         const confidencePercent = (bestScore * 100).toFixed(1);
 
-        // If metadata.js has "labels" array
+        // If metadata.json has "labels" array
         let className = `Class ${bestIndex}`;
         if (metadata && metadata.labels && metadata.labels[bestIndex]) {
           className = metadata.labels[bestIndex];
@@ -342,7 +342,6 @@ def index():
     return render_template_string(HTML_PAGE)
 
 if __name__ == "__main__":
-    # For local or Render deployment
     import sys
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
