@@ -1,66 +1,136 @@
-from flask import Flask, render_template_string, request, redirect, url_for, session
+import os
+from flask import Flask, render_template_string, session, jsonify, request, redirect, url_for
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key_here'
 
-INDEX_HTML = """
+HTML_PAGE = """
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8" />
-  <title>Local TF.js Model Loader</title>
+  <meta charset="UTF-8">
+  <title>Local TF.js Model Loader with Real Inference</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      margin: 30px;
+    }
+    h1 {
+      margin-bottom: 20px;
+    }
+    .btn {
+      padding: 10px 20px;
+      font-size: 1rem;
+      margin: 5px;
+    }
+    #camera {
+      background: #333;
+    }
+    #overlay {
+      position: absolute;
+      top: 10px; 
+      left: 10px;
+      color: #fff; 
+      font-weight: bold; 
+      text-shadow: 1px 1px #000;
+    }
+    #countdown {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      font-size: 2em;
+      color: #FF0000;
+      font-weight: bold;
+      text-shadow: 1px 1px #000;
+    }
+    .video-container {
+      display: inline-block; 
+      position: relative;
+    }
+    #modelStatus {
+      color: red; 
+      font-weight: bold; 
+      margin-bottom: 10px;
+    }
+    #summaryContainer {
+      margin-top: 30px;
+      text-align: left;
+      display: inline-block;
+    }
+    #summaryContainer p {
+      margin: 5px 0;
+    }
+  </style>
 </head>
-<body style="font-family: Arial, sans-serif; text-align:center; margin: 30px;">
-  <h1>Local Model Loader + Camera Demo</h1>
 
-  <!-- 1) Model File Inputs -->
-  <p>Select your TensorFlow.js model files (JSON + BIN):</p>
-  <input type="file" id="modelFiles" multiple accept=".json,.bin" />
-  <br/><br/>
+<body>
+  <h1>Local TF.js Model Loader + Real Predictions</h1>
 
-  <!-- 2) Open Camera Button -->
-  <button id="openCameraButton">Open Camera</button>
-  <br/><br/>
-
-  <!-- 3) Video/Inference Area -->
-  <div style="display:inline-block; position:relative;">
-    <video id="camera" width="640" height="480" autoplay muted style="background:#333"></video>
-    <div id="overlay" style="position:absolute; top:0; left:0; color:#fff; font-weight:bold;">
-      <!-- We'll display inference info here -->
-    </div>
+  <!-- 1) Model Files (JSON + BIN) -->
+  <div>
+    <label><strong>Upload your model.json and .bin:</strong></label><br/>
+    <input type="file" id="modelFiles" multiple accept=".json,.bin" />
   </div>
+  <div id="modelStatus"></div>
+
+  <!-- 2) Buttons to open camera / start / stop -->
+  <button class="btn" id="openCameraButton">Open Camera</button>
+  <button class="btn" id="startTaskButton">Start Task</button>
+  <button class="btn" id="stopTaskButton" disabled>Stop Task</button>
   <br/><br/>
 
-  <!-- 4) Start/Stop Demo -->
-  <button id="startButton">Start Task</button>
-  <button id="stopButton" disabled>Stop Task</button>
+  <!-- 3) Video + Overlay Container -->
+  <div class="video-container">
+    <video id="camera" width="640" height="480" autoplay muted playsinline></video>
+    <div id="countdown"></div>
+    <div id="overlay"></div>
+  </div>
+  <br/>
 
-  <!-- Script Section -->
+  <!-- 4) Optional: Summary Container (hidden until stop) -->
+  <div id="summaryContainer" style="display:none;">
+    <h2>Task Summary</h2>
+    <div id="summaryContent"></div>
+  </div>
+
   <!-- Load TensorFlow.js -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <!-- 
+    If your model requires specific TF.js converters or additional libs,
+    import them here as well.
+  -->
 
   <script>
-    let videoElem = null;
-    let model = null;
-    let inferenceInterval = null;
-
-    const openCameraButton = document.getElementById('openCameraButton');
-    const startButton = document.getElementById('startButton');
-    const stopButton = document.getElementById('stopButton');
-    const camera = document.getElementById('camera');
-    const overlay = document.getElementById('overlay');
+    // HTML Elements
     const modelFilesInput = document.getElementById('modelFiles');
+    const modelStatus = document.getElementById('modelStatus');
+    const openCameraButton = document.getElementById('openCameraButton');
+    const startTaskButton = document.getElementById('startTaskButton');
+    const stopTaskButton = document.getElementById('stopTaskButton');
+    const camera = document.getElementById('camera');
+    const countdownElem = document.getElementById('countdown');
+    const overlayElem = document.getElementById('overlay');
+    const summaryContainer = document.getElementById('summaryContainer');
+    const summaryContent = document.getElementById('summaryContent');
 
-    // 1) Let user pick model.json & .bin
-    // We'll store them in a variable to load after user picks them
+    // Variables
+    let model = null;
     let selectedFiles = [];
+    let countdownInterval = null;
+    let inferenceInterval = null;
+    let timeCounter = 0;           // total time in seconds while task is running
+    let classStats = {};          // { className: { seconds: 0, sumConfidence: 0, count: 0 } }
 
+    // 1) Selecting local model files
     modelFilesInput.addEventListener('change', (evt) => {
       selectedFiles = Array.from(evt.target.files); 
-      console.log('Selected files:', selectedFiles);
+      console.log("Selected files:", selectedFiles);
+      modelStatus.textContent = "Model files selected. (Not yet loaded)";
+      modelStatus.style.color = "blue";
     });
 
-    // 2) Open Camera
+    // 2) Open camera
     openCameraButton.addEventListener('click', async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
@@ -71,74 +141,174 @@ INDEX_HTML = """
       }
     });
 
-    // 3) Start Task
-    startButton.addEventListener('click', async () => {
-      // If user hasn't picked files or no model loaded yet, load it
+    // 3) Start Task (with 5-second countdown, then real inference)
+    startTaskButton.addEventListener('click', async () => {
+      // If model not loaded yet, attempt to load
       if (!model) {
         if (!selectedFiles || selectedFiles.length === 0) {
-          alert("Please select your model.json and .bin file(s) first.");
+          alert("Please select your model.json and .bin files first!");
           return;
         }
         try {
-          // Use tf.io.browserFiles to load them
+          modelStatus.textContent = "Loading model...";
+          modelStatus.style.color = "orange";
           model = await loadLocalModel(selectedFiles);
-          console.log("Model loaded:", model);
+          modelStatus.textContent = "Model loaded successfully!";
+          modelStatus.style.color = "green";
         } catch (err) {
-          alert("Error loading model from files.");
-          console.error(err);
+          console.error("Model loading error:", err);
+          modelStatus.textContent = "Error loading model!";
+          modelStatus.style.color = "red";
           return;
         }
       }
-      // Start "inference"
-      startButton.disabled = true;
-      stopButton.disabled = false;
-      runInference();
+
+      // Reset stats
+      timeCounter = 0;
+      classStats = {};
+      overlayElem.textContent = "";
+      summaryContainer.style.display = "none"; // hide summary if previously shown
+
+      // 5-second countdown
+      let countdownVal = 5;
+      countdownElem.textContent = countdownVal;
+      startTaskButton.disabled = true;
+      stopTaskButton.disabled = true;
+
+      countdownInterval = setInterval(() => {
+        countdownVal--;
+        if (countdownVal > 0) {
+          countdownElem.textContent = countdownVal;
+        } else {
+          clearInterval(countdownInterval);
+          countdownElem.textContent = "";
+          stopTaskButton.disabled = false;
+          // Start real-time inference
+          startInference();
+        }
+      }, 1000);
     });
 
     // 4) Stop Task
-    stopButton.addEventListener('click', () => {
+    stopTaskButton.addEventListener('click', () => {
       if (inferenceInterval) {
         clearInterval(inferenceInterval);
       }
-      startButton.disabled = false;
-      stopButton.disabled = true;
-      overlay.innerHTML = "";
+      startTaskButton.disabled = false;
+      stopTaskButton.disabled = true;
+      overlayElem.textContent = "";
+
+      // Show summary
+      showSummary();
     });
 
-    // Utility: Load the local model with tf.io.browserFiles
-    async function loadLocalModel(files) {
-      // You can detect if it's a graph model or layers model
-      // For Teachable Machine, it might be a layers model
-      // But let's try both. We'll assume it's a graph model first
-      // If that fails, we can fallback to a layers model, etc.
+    // --- REAL INFERENCE LOGIC EVERY 1 SECOND ---
+    async function startInference() {
+      inferenceInterval = setInterval(async () => {
+        timeCounter++;
 
-      // Try a graph model
+        // 1) Capture current video frame as a tensor
+        const inputTensor = tf.browser.fromPixels(camera);
+        // For Teachable Machine models, you often need to resize / normalize
+        // Adjust these steps to your model's expected input shape.
+        const resized = tf.image.resizeBilinear(inputTensor, [224, 224]);
+        const normalized = resized.div(255);
+        const batched = normalized.expandDims(0);
+
+        // 2) Predict
+        // If your model is a layers model with "predict":
+        const predictions = model.predict(batched);
+        // predictions shape might be [1, NCLASSES]
+        
+        // 3) Get top class and confidence
+        const data = await predictions.data();
+        // e.g., data might be [0.1, 0.7, 0.2] for 3 classes
+        let bestIndex = 0;
+        let bestScore = data[0];
+        for (let i = 1; i < data.length; i++) {
+          if (data[i] > bestScore) {
+            bestScore = data[i];
+            bestIndex = i;
+          }
+        }
+        const confidencePercent = (bestScore * 100).toFixed(1);
+        
+        // OPTIONAL: If you know your class labels
+        // Hardcode or fetch from somewhere. 
+        // For example: 
+        const classLabels = ["Class A", "Class B", "Class C"]; 
+        // If your model has more classes, extend it accordingly.
+
+        const predictedClassName = classLabels[bestIndex] || `Class ${bestIndex}`;
+
+        // 4) Update overlay
+        overlayElem.textContent = 
+          `Time: ${timeCounter}s | ${predictedClassName} (${confidencePercent}%)`;
+
+        // 5) Track stats
+        if (!classStats[predictedClassName]) {
+          classStats[predictedClassName] = {
+            seconds: 0,
+            sumConfidence: 0,
+            count: 0
+          };
+        }
+        classStats[predictedClassName].seconds++;
+        classStats[predictedClassName].sumConfidence += parseFloat(confidencePercent);
+        classStats[predictedClassName].count++;
+
+        // Cleanup
+        batched.dispose();
+        resized.dispose();
+        normalized.dispose();
+        inputTensor.dispose();
+        predictions.dispose();
+      }, 1000);
+    }
+
+    // --- LOADING LOCAL MODEL FILES USING tf.io.browserFiles ---
+    async function loadLocalModel(files) {
+      // Try graph model first
       try {
-        const model = await tf.loadGraphModel(tf.io.browserFiles(files));
-        return model;
-      } catch (e1) {
-        console.warn("Graph model load failed, trying layers model...", e1);
-        // Try layers model
+        const gModel = await tf.loadGraphModel(tf.io.browserFiles(files));
+        return gModel;
+      } catch (gErr) {
+        console.warn("Graph model load failed, trying layers model...", gErr);
+        // Then try layers model
         try {
-          const model = await tf.loadLayersModel(tf.io.browserFiles(files));
-          return model;
-        } catch (e2) {
-          console.error("Both graph model & layers model load failed:", e2);
-          throw e2;
+          const lModel = await tf.loadLayersModel(tf.io.browserFiles(files));
+          return lModel;
+        } catch (lErr) {
+          console.error("Both graph/layers load failed", lErr);
+          throw lErr;
         }
       }
     }
 
-    // Mock or Real Inference
-    function runInference() {
-      // If we had real data from the camera, we'd do something like:
-      // const predictions = model.predict(processVideoFrame(camera));
-      // Instead, let's just mock it every 1 second
-      inferenceInterval = setInterval(() => {
-        // For demonstration, random "Confidence" 0-100
-        const randomConfidence = Math.floor(Math.random() * 101);
-        overlay.innerHTML = `Mock Inference: ${randomConfidence}% confidence`;
-      }, 1000);
+    // --- SHOW SUMMARY AFTER STOP ---
+    function showSummary() {
+      // Calculate total time
+      const totalTime = timeCounter; // in seconds
+
+      // Build a summary table or text
+      let html = `<p><strong>Total Task Time:</strong> ${totalTime} seconds</p>`;
+      html += "<p><strong>Class-by-Class:</strong></p>";
+      
+      // For each class in classStats
+      for (const className in classStats) {
+        const stats = classStats[className];
+        const avgConfidence = 
+          (stats.sumConfidence / stats.count).toFixed(1) || 0;
+        html += `
+          <p>
+            <strong>${className}</strong>: 
+            ${stats.seconds} s, 
+            Avg Confidence: ${avgConfidence}%
+          </p>`;
+      }
+
+      summaryContent.innerHTML = html;
+      summaryContainer.style.display = "block";
     }
   </script>
 </body>
@@ -147,13 +317,12 @@ INDEX_HTML = """
 
 @app.route("/")
 def index():
-    # Renders a single-page app with file inputs, camera, etc.
-    return render_template_string(INDEX_HTML)
+    return render_template_string(HTML_PAGE)
 
-# (Optional) A summary route if you want a separate page:
-@app.route("/summary")
-def summary():
-    return "<h1>Summary Page</h1><p>Not implemented yet.</p>"
+# (Optional) If you want a summary route or other endpoints, add here.
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # For local testing or deployment on Render (with minor tweaks for the port).
+    import sys
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
