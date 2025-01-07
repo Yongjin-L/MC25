@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template_string, session, jsonify
+from flask import Flask, render_template_string
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key_here'
@@ -9,12 +9,13 @@ HTML_PAGE = """
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>MC25 KIN217 with Mr. Lee</title>
+  <title>MC25 KIN217 with Mr. Lee - Overlay on Camera</title>
   <style>
     body {
       font-family: Arial, sans-serif;
       text-align: center;
       margin: 30px;
+      background: #f0f0f0;
     }
     h1 {
       margin-bottom: 20px;
@@ -24,29 +25,28 @@ HTML_PAGE = """
       font-size: 1rem;
       margin: 5px;
     }
-    #camera {
-      background: #333;
-    }
+    /* Container to hold the video and overlay absolutely */
     .video-container {
-      display: inline-block; 
       position: relative;
+      display: inline-block;
+      background: #000; /* fallback if camera isn't open */
     }
-    #countdown {
+    /* The actual video feed */
+    #camera {
+      width: 640px;
+      height: 480px;
+      background: #222; /* fallback background if no camera feed */
+      z-index: 1;
+    }
+    /* The overlay that goes on top of the video */
+    #overlay {
       position: absolute;
       top: 10px;
       left: 10px;
-      font-size: 2em;
-      color: #FF0000;
+      color: #fff;
       font-weight: bold;
       text-shadow: 1px 1px #000;
-    }
-    #overlay {
-      position: absolute;
-      top: 50px; 
-      left: 10px;
-      color: #fff; 
-      font-weight: bold; 
-      text-shadow: 1px 1px #000;
+      z-index: 2; /* ensure it's above the video */
     }
     #modelStatus {
       margin-top: 10px;
@@ -62,30 +62,28 @@ HTML_PAGE = """
     }
   </style>
 </head>
-
 <body>
-  <h1>MC25 KIN217 with Mr. Lee</h1>
+  <h1>MC25 KIN217 with Mr. Lee - Overlay on Camera</h1>
 
-  <!-- 1) Upload THREE files: metadata.json, model.json, weights.bin -->
-  <p><strong>Upload your metadata.json, model.json, and weights.bin:</strong></p>
+  <!-- 1) Upload your model.json & weights.bin (2D input) -->
+  <p><strong>Upload model.json & weights.bin (and optional metadata.json):</strong></p>
   <input type="file" id="modelFiles" multiple accept=".json,.bin" />
   <div id="modelStatus" style="color:red;"></div>
 
-  <!-- 2) Buttons to open camera / start / stop -->
-  <button class="btn" id="openCameraButton">Open Camera</button>
-  <button class="btn" id="startTaskButton">Start Task</button>
-  <button class="btn" id="stopTaskButton" disabled>Stop Task</button>
-  <br/><br/>
+  <!-- 2) Buttons: Open Camera / Start Task / Stop Task -->
+  <div>
+    <button class="btn" id="openCameraButton">Open Camera</button>
+    <button class="btn" id="startTaskButton">Start Task</button>
+    <button class="btn" id="stopTaskButton" disabled>Stop Task</button>
+  </div>
 
-  <!-- 3) Video + Overlay Container -->
+  <!-- 3) Video container with overlay text on top -->
   <div class="video-container">
-    <video id="camera" width="640" height="480" autoplay muted playsinline></video>
-    <div id="countdown"></div>
+    <video id="camera" autoplay muted playsinline></video>
     <div id="overlay"></div>
   </div>
-  <br/>
 
-  <!-- 4) Task Summary (hidden until stop) -->
+  <!-- 4) Summary after Stop Task -->
   <div id="summaryContainer" style="display:none;">
     <h2>Task Summary</h2>
     <div id="summaryContent"></div>
@@ -93,7 +91,6 @@ HTML_PAGE = """
 
   <!-- Load TensorFlow.js -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-
   <script>
     const modelFilesInput = document.getElementById('modelFiles');
     const modelStatus = document.getElementById('modelStatus');
@@ -101,65 +98,68 @@ HTML_PAGE = """
     const startTaskButton = document.getElementById('startTaskButton');
     const stopTaskButton = document.getElementById('stopTaskButton');
     const camera = document.getElementById('camera');
-    const countdownElem = document.getElementById('countdown');
     const overlayElem = document.getElementById('overlay');
     const summaryContainer = document.getElementById('summaryContainer');
     const summaryContent = document.getElementById('summaryContent');
 
     let selectedFiles = [];
-    let metadata = null;    // Will store parsed class labels (from metadata.json)
-    let model = null;       // tf.Model or tf.GraphModel
+    let model = null;
+    let metadata = null; // optional for class labels
     let inferenceInterval = null;
-    let countdownInterval = null;
-    let timeCounter = 0;    // in seconds
-    let classStats = {};    // { className: { seconds: 0, sumConfidence: 0, count: 0 } }
+    let timeCounter = 0;
+    let classStats = {}; // { className: { seconds, sumConfidence, count }}
 
     modelFilesInput.addEventListener('change', (evt) => {
       selectedFiles = Array.from(evt.target.files);
-      modelStatus.textContent = "Files selected. Parsing...";
+      modelStatus.textContent = "Files selected. Ready to load...";
       modelStatus.style.color = "orange";
     });
 
-    // 1) Parse metadata.json, load model.json + weights.bin
-    async function loadAllFiles(files) {
-      // We expect exactly 3 files:
-      // 1) metadata.json
-      // 2) model.json
-      // 3) weights.bin
-      // Let's identify them by filename or extension
-      let metaFile = null;
+    // Optional: open camera feed (user must allow)
+    openCameraButton.addEventListener('click', async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        camera.srcObject = stream;
+      } catch (err) {
+        alert("Could not access camera. Please allow permissions if you want a live feed.");
+        console.error(err);
+      }
+    });
+
+    // Load model + (optional) metadata
+    async function loadModelAndWeights(files) {
       let modelFile = null;
-      let weightFile = null;
+      let weightsFile = null;
+      let metaFile = null;
 
       for (const f of files) {
         const fname = f.name.toLowerCase();
-        if (fname.endsWith("metadata.json")) {
-          metaFile = f;
-        } else if (fname.endsWith("model.json")) {
+        if (fname.endsWith("model.json")) {
           modelFile = f;
         } else if (fname.endsWith(".bin")) {
-          weightFile = f;
+          weightsFile = f;
+        } else if (fname.endsWith("metadata.json")) {
+          metaFile = f;
         }
       }
-
-      if (!metaFile || !modelFile || !weightFile) {
-        throw new Error("Please select metadata.json, model.json, and weights.bin!");
+      if (!modelFile || !weightsFile) {
+        throw new Error("Please select model.json and weights.bin!");
       }
 
-      // 1.1) Parse metadata.json for class labels
-      metadata = await parseMetadataFile(metaFile);
+      // If there's metadata, parse it
+      if (metaFile) {
+        metadata = await parseMetadataFile(metaFile);
+      }
 
-      // 1.2) Load model (model.json + weights.bin) via tf.io.browserFiles
-      const modelAndWeightsFiles = [modelFile, weightFile];
+      // Attempt graph or layers
+      const modelAndWeights = [modelFile, weightsFile];
       try {
-        // Attempt graph model first
-        const gModel = await tf.loadGraphModel(tf.io.browserFiles(modelAndWeightsFiles));
+        const gModel = await tf.loadGraphModel(tf.io.browserFiles(modelAndWeights));
         return gModel;
       } catch (gErr) {
         console.warn("Graph model load failed, trying layers model...", gErr);
-        // Then try layers model
         try {
-          const lModel = await tf.loadLayersModel(tf.io.browserFiles(modelAndWeightsFiles));
+          const lModel = await tf.loadLayersModel(tf.io.browserFiles(modelAndWeights));
           return lModel;
         } catch (lErr) {
           console.error("Both graph & layers model load failed:", lErr);
@@ -168,54 +168,38 @@ HTML_PAGE = """
       }
     }
 
-    // Parse the metadata.json file content
+    // Parse metadata.json if present
     function parseMetadataFile(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (evt) => {
           try {
-            const text = evt.target.result;
-            // parse it as JSON
-            const json = JSON.parse(text);
+            const json = JSON.parse(evt.target.result);
             resolve(json);
           } catch (err) {
             reject(err);
           }
         };
-        reader.onerror = (err) => {
-          reject(err);
-        };
+        reader.onerror = (err) => reject(err);
         reader.readAsText(file);
       });
     }
 
-    // 2) Open camera
-    openCameraButton.addEventListener('click', async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        camera.srcObject = stream;
-      } catch (err) {
-        alert("Could not access camera. Please allow permissions.");
-        console.error(err);
-      }
-    });
-
-    // 3) Start Task with 5-second countdown
+    // Start Task
     startTaskButton.addEventListener('click', async () => {
-      // If model not loaded yet, load
       if (!model) {
-        if (!selectedFiles || selectedFiles.length < 3) {
-          alert("Please select metadata.json, model.json, and weights.bin first!");
+        if (!selectedFiles || selectedFiles.length < 2) {
+          alert("Please select model.json and weights.bin!");
           return;
         }
         try {
-          modelStatus.textContent = "Loading files...";
+          modelStatus.textContent = "Loading model...";
           modelStatus.style.color = "orange";
-          model = await loadAllFiles(selectedFiles);
+          model = await loadModelAndWeights(selectedFiles);
           modelStatus.textContent = "Model loaded successfully!";
           modelStatus.style.color = "green";
         } catch (err) {
-          modelStatus.textContent = "Error loading model files!";
+          modelStatus.textContent = "Error loading model!";
           modelStatus.style.color = "red";
           console.error(err);
           return;
@@ -228,26 +212,56 @@ HTML_PAGE = """
       overlayElem.textContent = "";
       summaryContainer.style.display = "none";
 
-      let countdownVal = 5;
-      countdownElem.textContent = countdownVal;
       startTaskButton.disabled = true;
-      stopTaskButton.disabled = true;
+      stopTaskButton.disabled = false;
 
-      countdownInterval = setInterval(() => {
-        countdownVal--;
-        if (countdownVal > 0) {
-          countdownElem.textContent = countdownVal;
-        } else {
-          clearInterval(countdownInterval);
-          countdownElem.textContent = "";
-          stopTaskButton.disabled = false;
-          // Start real-time inference
-          startInference();
-        }
+      // Inference loop every 1 second
+      inferenceInterval = setInterval(() => {
+        timeCounter++;
+
+        // Create or fetch a [1, 14739] vector for your 2D model
+        // For demonstration, use random data. Replace with your real features if needed.
+        const inputTensor = tf.randomNormal([1, 14739]);
+
+        // Predict
+        const predictions = model.predict(inputTensor);
+        predictions.data().then((data) => {
+          // Suppose model outputs 2 classes (like your snippet)
+          let bestIndex = 0;
+          let bestScore = data[0];
+          for (let i = 1; i < data.length; i++) {
+            if (data[i] > bestScore) {
+              bestScore = data[i];
+              bestIndex = i;
+            }
+          }
+          const confidencePercent = (bestScore * 100).toFixed(1);
+
+          // If you have metadata.labels
+          let className = `Class ${bestIndex}`;
+          if (metadata && metadata.labels && metadata.labels[bestIndex]) {
+            className = metadata.labels[bestIndex];
+          }
+
+          // Overlay text
+          overlayElem.textContent = `Time: ${timeCounter}s | ${className} (${confidencePercent}%)`;
+
+          // Update stats
+          if (!classStats[className]) {
+            classStats[className] = { seconds: 0, sumConfidence: 0, count: 0 };
+          }
+          classStats[className].seconds++;
+          classStats[className].sumConfidence += parseFloat(confidencePercent);
+          classStats[className].count++;
+        });
+
+        // Clean up
+        predictions.dispose();
+        inputTensor.dispose();
       }, 1000);
     });
 
-    // 4) Stop Task
+    // Stop Task
     stopTaskButton.addEventListener('click', () => {
       if (inferenceInterval) {
         clearInterval(inferenceInterval);
@@ -259,76 +273,14 @@ HTML_PAGE = """
       showSummary();
     });
 
-    // Real inference each second
-    async function startInference() {
-      inferenceInterval = setInterval(async () => {
-        timeCounter++;
-
-        // Capture frame
-        const inputTensor = tf.browser.fromPixels(camera);
-        // Resize if needed (depends on your model)
-        const resized = tf.image.resizeBilinear(inputTensor, [224, 224]);
-        // Normalize if needed
-        const normalized = resized.div(255);
-        const batched = normalized.expandDims(0);
-
-        // Predict
-        const predictions = model.predict(batched);
-        const data = await predictions.data();
-
-        // Identify top class
-        let bestIndex = 0;
-        let bestScore = data[0];
-        for (let i = 1; i < data.length; i++) {
-          if (data[i] > bestScore) {
-            bestScore = data[i];
-            bestIndex = i;
-          }
-        }
-        const confidencePercent = (bestScore * 100).toFixed(1);
-
-        // If metadata.json has "labels" array
-        let className = `Class ${bestIndex}`;
-        if (metadata && metadata.labels && metadata.labels[bestIndex]) {
-          className = metadata.labels[bestIndex];
-        }
-
-        overlayElem.textContent = 
-          `Time: ${timeCounter}s | ${className} (${confidencePercent}%)`;
-
-        // Track stats
-        if (!classStats[className]) {
-          classStats[className] = {
-            seconds: 0,
-            sumConfidence: 0,
-            count: 0
-          };
-        }
-        classStats[className].seconds++;
-        classStats[className].sumConfidence += parseFloat(confidencePercent);
-        classStats[className].count++;
-
-        // Cleanup
-        predictions.dispose();
-        batched.dispose();
-        resized.dispose();
-        normalized.dispose();
-        inputTensor.dispose();
-      }, 1000);
-    }
-
-    // 5) Show summary
+    // Show Summary
     function showSummary() {
-      const totalTime = timeCounter;
-      let html = `<p><strong>Total Task Time:</strong> ${totalTime} seconds</p>`;
-
-      // Each class: Name, average confidence, seconds
+      let html = `<p><strong>Total Task Time:</strong> ${timeCounter} seconds</p>`;
       for (const cname in classStats) {
         const stats = classStats[cname];
         const avgConf = (stats.sumConfidence / stats.count).toFixed(1);
         html += `<p><strong>${cname}</strong>: ${stats.seconds}s, Avg Confidence: ${avgConf}%</p>`;
       }
-
       summaryContent.innerHTML = html;
       summaryContainer.style.display = "block";
     }
