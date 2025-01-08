@@ -10,7 +10,7 @@ HTML_PAGE = """
 <head>
     <meta charset="UTF-8">
     <title>Pose Duration Tracker with Mr. Lee</title>
-    <subtitle>KIN217 for Middle College</subtitle>
+    <subtitle>KIN217 for MC25</subtitle>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -49,15 +49,18 @@ HTML_PAGE = """
         }
         #canvas-container {
             position: relative;
-            display: inline-block;
+            display: flex;
+            justify-content: center;
+            align-items: center;
             margin-top: 20px;
+            gap: 20px; /* Adds space between webcam and chart */
         }
         /* Adjusted canvas size for better user experience */
-        #canvas {
+        #webcam-canvas {
             border: 2px solid #ccc;
             border-radius: 8px;
-            width: 640px;
-            height: 480px;
+            width: 320px;
+            height: 240px;
         }
         #overlay {
             position: absolute;
@@ -67,11 +70,31 @@ HTML_PAGE = """
             background: rgba(0, 0, 0, 0.5);
             padding: 10px;
             border-radius: 5px;
-            font-size: 1.2em;
+            font-size: 1em;
             text-align: left;
+            width: 180px;
+        }
+        #feedback-message {
+            margin-top: 10px;
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+        #countdown {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: red;
+            font-size: 3em;
+            background: rgba(255, 255, 255, 0.7);
+            padding: 20px;
+            border-radius: 10px;
+            display: none;
         }
         #bar-chart-container {
             margin-top: 20px;
+            width: 160px; /* Made narrower */
+            height: 240px;
         }
         #summary-section {
             display: none;
@@ -82,6 +105,14 @@ HTML_PAGE = """
         #summary-content {
             text-align: left;
             margin-top: 10px;
+        }
+        #summary-graph-container {
+            margin-top: 20px;
+            width: 100%;
+            max-width: 600px;
+            height: 300px;
+            margin-left: auto;
+            margin-right: auto;
         }
         .hidden {
             display: none;
@@ -108,9 +139,16 @@ HTML_PAGE = """
             background-color: #f0f0f0;
         }
         @media (max-width: 700px) {
-            #canvas {
+            #canvas-container {
+                flex-direction: column;
+            }
+            #webcam-canvas, #bar-chart-container, #summary-graph-container {
                 width: 100%;
                 height: auto;
+            }
+            #overlay {
+                width: 150px;
+                font-size: 1em;
             }
             #model-section input {
                 width: 100%;
@@ -134,6 +172,8 @@ HTML_PAGE = """
         <input type="text" id="model-url" placeholder="Enter model URL e.g., https://teachablemachine.withgoogle.com/models/j3EtRGf_g/">
         <br>
         <button type="button" id="check-model-button">Check Model URL</button>
+        <button type="button" id="test-webcam-button">Test Webcam</button>
+        <button type="button" id="stop-test-webcam-button" class="hidden">Stop Test</button>
         <div id="feedback"></div>
     </div>
 
@@ -141,15 +181,16 @@ HTML_PAGE = """
     <div id="task-section" class="hidden">
         <h2>Pose Matching Task</h2>
         <div id="canvas-container">
-            <canvas id="canvas"></canvas>
+            <canvas id="webcam-canvas"></canvas>
+            <canvas id="bar-chart"></canvas>
             <div id="overlay">
                 <div id="task-timer">Time: 0.00s</div>
-                <!-- Best Match Display Removed -->
+                <div id="current-class">Class: N/A</div>
+                <div id="current-probability">Probability: 0%</div>
             </div>
+            <div id="countdown">5</div>
         </div>
-        <div id="bar-chart-container">
-            <canvas id="bar-chart" style="height:300px;"></canvas>
-        </div>
+        <div id="feedback-message"></div>
         <br>
         <button type="button" id="start-task-button" disabled>Start Task</button>
         <button type="button" id="end-task-button" class="hidden">End Task</button>
@@ -160,6 +201,9 @@ HTML_PAGE = """
         <h2>Task Summary</h2>
         <div id="summary-content">
             <!-- Summary details will be populated here -->
+        </div>
+        <div id="summary-graph-container">
+            <canvas id="summary-graph"></canvas>
         </div>
         <button type="button" id="restart-button">Restart</button>
     </div>
@@ -174,26 +218,33 @@ HTML_PAGE = """
         let taskTimerInterval;
         let taskStartTime = null;
         let classDurations = {}; // Object to track durations per class
-        let classStreaks = {}; // Object to track current streak per class
-        let classOccurrences = {}; // Object to track occurrences per class
-        let barChart; // Chart.js instance
+        let barChart; // Real-time Chart.js instance
         let barChartInitialized = false; // Flag to initialize chart once
+        let summaryChart; // Summary Chart.js instance
+        let summaryChartInitialized = false; // Flag for summary chart
 
         // DOM Elements
         const modelUrlInput = document.getElementById('model-url');
         const checkModelButton = document.getElementById('check-model-button');
+        const testWebcamButton = document.getElementById('test-webcam-button');
+        const stopTestWebcamButton = document.getElementById('stop-test-webcam-button');
         const feedback = document.getElementById('feedback');
         const taskSection = document.getElementById('task-section');
-        const canvas = document.getElementById('canvas');
-        const ctxCanvas = canvas.getContext('2d');
+        const webcamCanvas = document.getElementById('webcam-canvas');
+        const ctxWebcamCanvas = webcamCanvas.getContext('2d');
+        const barChartCanvas = document.getElementById('bar-chart').getContext('2d');
         const overlay = document.getElementById('overlay');
         const taskTimer = document.getElementById('task-timer');
+        const currentClass = document.getElementById('current-class');
+        const currentProbability = document.getElementById('current-probability');
+        const countdownElement = document.getElementById('countdown');
+        const feedbackMessage = document.getElementById('feedback-message');
         const startTaskButton = document.getElementById('start-task-button');
         const endTaskButton = document.getElementById('end-task-button');
         const summarySection = document.getElementById('summary-section');
         const summaryContent = document.getElementById('summary-content');
+        const summaryGraphCanvas = document.getElementById('summary-graph').getContext('2d');
         const restartButton = document.getElementById('restart-button');
-        const barChartCanvas = document.getElementById('bar-chart').getContext('2d');
 
         // Function to validate and load the model
         async function loadModel(modelURL) {
@@ -214,10 +265,8 @@ HTML_PAGE = """
 
                 console.log(`Model loaded with ${maxPredictions} classes.`);
 
-                // Initialize classDurations, classStreaks, and classOccurrences
+                // Initialize classDurations
                 classDurations = {};
-                classStreaks = {};
-                classOccurrences = {};
                 for (let i = 0; i < maxPredictions; i++) {
                     let className = null;
 
@@ -238,8 +287,6 @@ HTML_PAGE = """
                     }
 
                     classDurations[className] = 0; // Initialize duration to 0
-                    classStreaks[className] = 0; // Initialize streak to 0
-                    classOccurrences[className] = 0; // Initialize occurrences to 0
                 }
 
                 // If successful, return true
@@ -252,27 +299,27 @@ HTML_PAGE = """
             }
         }
 
-        // Function to initialize the webcam
+        // Function to initialize the main webcam
         async function setupWebcam() {
-            const width = 640; // Standard webcam width
-            const height = 480; // Standard webcam height
+            const width = 320; // Standard webcam width for task
+            const height = 240; // Standard webcam height for task
             const flip = true;
             webcam = new tmPose.Webcam(width, height, flip);
             try {
-                console.log("Setting up webcam...");
+                console.log("Setting up main webcam...");
                 await webcam.setup(); // Request webcam access
                 await webcam.play();
-                console.log("Webcam started.");
+                console.log("Main webcam started.");
 
-                // Dynamically set canvas dimensions to match webcam video
-                canvas.width = webcam.canvas.width;
-                canvas.height = webcam.canvas.height;
+                // Set canvas dimensions
+                webcamCanvas.width = webcam.canvas.width;
+                webcamCanvas.height = webcam.canvas.height;
 
                 window.requestAnimationFrame(loop);
                 return true;
             } catch (error) {
-                console.error("Error accessing webcam:", error);
-                feedback.textContent = `Error accessing webcam: ${error.message}`;
+                console.error("Error accessing main webcam:", error);
+                feedback.textContent = `Error accessing main webcam: ${error.message}`;
                 feedback.className = "error";
                 return false;
             }
@@ -285,7 +332,7 @@ HTML_PAGE = """
             taskTimer.textContent = `Time: ${elapsed}s`;
         }
 
-        // Function to initialize the bar chart
+        // Function to initialize the real-time bar chart
         function initializeBarChart(labels, initialData) {
             barChart = new Chart(barChartCanvas, {
                 type: 'bar',
@@ -312,7 +359,7 @@ HTML_PAGE = """
             });
         }
 
-        // Function to update the bar chart
+        // Function to update the real-time bar chart
         function updateBarChart(labels, data) {
             if (!barChartInitialized) {
                 initializeBarChart(labels, data);
@@ -322,6 +369,70 @@ HTML_PAGE = """
                 barChart.data.datasets[0].data = data;
                 barChart.update();
             }
+        }
+
+        // Function to initialize the summary bar chart
+        function initializeSummaryChart(labels, data) {
+            summaryChart = new Chart(summaryGraphCanvas, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Total Duration (s)',
+                        data: data,
+                        backgroundColor: 'rgba(75, 192, 192, 0.7)',
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            enabled: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        // Function to update the summary bar chart
+        function updateSummaryChart(labels, data) {
+            if (!summaryChartInitialized) {
+                initializeSummaryChart(labels, data);
+                summaryChartInitialized = true;
+            } else {
+                summaryChart.data.labels = labels;
+                summaryChart.data.datasets[0].data = data;
+                summaryChart.update();
+            }
+        }
+
+        // Function to start the 5-second countdown
+        function startCountdown(duration, display, callback) {
+            let timer = duration, seconds;
+            display.style.display = 'block';
+            display.textContent = timer;
+            const countdownInterval = setInterval(() => {
+                timer--;
+                if (timer >= 0) {
+                    display.textContent = timer;
+                }
+                if (timer < 0) {
+                    clearInterval(countdownInterval);
+                    display.style.display = 'none';
+                    callback();
+                }
+            }, 1000);
         }
 
         // Main prediction loop
@@ -344,11 +455,11 @@ HTML_PAGE = """
                 // Log predictions for debugging
                 console.log("Predictions:", prediction);
 
-                // Prepare data for bar chart
+                // Prepare data for real-time bar chart
                 const labels = prediction.map(pred => pred.className);
                 const data = prediction.map(pred => (pred.probability * 100).toFixed(2));
 
-                // Update the bar chart with current probabilities
+                // Update the real-time bar chart with current probabilities
                 updateBarChart(labels, data);
 
                 // Track durations for classes exceeding 80% similarity
@@ -362,27 +473,35 @@ HTML_PAGE = """
                     // Increment duration for the top high confidence class
                     if (classDurations.hasOwnProperty(topHighConfidence.className)) {
                         classDurations[topHighConfidence.className] += 0.1; // Assuming loop runs every 100ms
-
-                        // Increment streak
-                        classStreaks[topHighConfidence.className] += 0.1;
-
-                        // Check if streak exceeds 2 seconds
-                        if (classStreaks[topHighConfidence.className] >= 2.0) {
-                            classOccurrences[topHighConfidence.className] += 1;
-                            classStreaks[topHighConfidence.className] = 0; // Reset streak after counting
-                        }
                     } else {
                         // Initialize if not present
                         classDurations[topHighConfidence.className] = 0.1;
-                        classStreaks[topHighConfidence.className] = 0.1;
-                        classOccurrences[topHighConfidence.className] = 0;
+                    }
+
+                    // Update overlay with current class and probability
+                    currentClass.textContent = `Class: ${topHighConfidence.className}`;
+                    currentProbability.textContent = `Probability: ${(topHighConfidence.probability * 100).toFixed(2)}%`;
+
+                    // Provide feedback message based on probability
+                    if (topHighConfidence.probability >= 0.8) {
+                        feedbackMessage.textContent = "Great Pose!";
+                        feedbackMessage.style.color = "green";
+                    } else {
+                        feedbackMessage.textContent = "Adjust Your Pose.";
+                        feedbackMessage.style.color = "red";
                     }
 
                     console.log(`Class "${topHighConfidence.className}" exceeded 80% similarity. Total duration: ${classDurations[topHighConfidence.className].toFixed(2)}s`);
+                } else {
+                    // If no class exceeds 80%, reset feedback
+                    currentClass.textContent = `Class: N/A`;
+                    currentProbability.textContent = `Probability: 0%`;
+                    feedbackMessage.textContent = "No Pose Detected.";
+                    feedbackMessage.style.color = "orange";
                 }
 
                 // Draw the pose
-                drawPose(pose, ctxCanvas);
+                drawPose(pose, ctxWebcamCanvas);
             } catch (error) {
                 console.error("Error during prediction:", error);
                 feedback.textContent = `Error during prediction: ${error.message}`;
@@ -393,7 +512,7 @@ HTML_PAGE = """
         // Function to draw pose keypoints and skeleton
         function drawPose(pose, ctx) {
             if (webcam.canvas) {
-                ctx.drawImage(webcam.canvas, 0, 0, canvas.width, canvas.height);
+                ctx.drawImage(webcam.canvas, 0, 0, webcamCanvas.width, webcamCanvas.height);
                 if (pose) {
                     const minPartConfidence = 0.5;
                     tmPose.drawKeypoints(pose.keypoints, minPartConfidence, ctx);
@@ -421,12 +540,40 @@ HTML_PAGE = """
                 feedback.className = "success";
                 taskSection.classList.remove('hidden');
                 startTaskButton.disabled = false;
+                testWebcamButton.disabled = false;
             } else {
                 feedback.textContent = "Failed to load model. Please check the URL.";
                 feedback.className = "error";
                 taskSection.classList.add('hidden');
                 startTaskButton.disabled = true;
+                testWebcamButton.disabled = true;
             }
+        });
+
+        // Event Listener for Test Webcam Button
+        testWebcamButton.addEventListener('click', async () => {
+            const testSuccess = await setupWebcam();
+            if (testSuccess) {
+                testWebcamButton.classList.add('hidden');
+                stopTestWebcamButton.classList.remove('hidden');
+                feedback.textContent = "Webcam test running...";
+                feedback.className = "success";
+            }
+        });
+
+        // Event Listener for Stop Test Webcam Button
+        stopTestWebcamButton.addEventListener('click', () => {
+            // Stop the webcam
+            if (webcam) {
+                webcam.stop();
+                webcam = null;
+                console.log("Webcam stopped.");
+            }
+
+            stopTestWebcamButton.classList.add('hidden');
+            testWebcamButton.classList.remove('hidden');
+            feedback.textContent = "Webcam test stopped.";
+            feedback.className = "success";
         });
 
         // Event Listener for Start Task Button
@@ -434,35 +581,39 @@ HTML_PAGE = """
             // Hide feedback and model section
             document.getElementById('model-section').classList.add('hidden');
 
-            // Initialize webcam
-            const webcamSetupSuccess = await setupWebcam();
-            if (!webcamSetupSuccess) {
-                return;
-            }
-
-            // Show task section elements
-            startTaskButton.classList.add('hidden');
-            endTaskButton.classList.remove('hidden');
-
-            // Start the timer
-            taskStartTime = performance.now();
-            taskTimerInterval = setInterval(updateTaskTimer, 100);
-
-            // Reset class durations, streaks, and occurrences
-            for (let className in classDurations) {
-                if (classDurations.hasOwnProperty(className)) {
-                    classDurations[className] = 0;
-                    classStreaks[className] = 0;
-                    classOccurrences[className] = 0;
+            // Start the 5-second countdown
+            startCountdown(5, countdownElement, async () => {
+                // Initialize webcam for the task
+                const webcamSetupSuccess = await setupWebcam();
+                if (!webcamSetupSuccess) {
+                    return;
                 }
-            }
 
-            // Initialize bar chart with zero probabilities
-            const initialLabels = Object.keys(classDurations);
-            const initialData = initialLabels.map(() => 0);
-            updateBarChart(initialLabels, initialData);
+                // Show task section elements
+                startTaskButton.classList.add('hidden');
+                endTaskButton.classList.remove('hidden');
 
-            console.log("Task started.");
+                // Start the timer
+                taskStartTime = performance.now();
+                taskTimerInterval = setInterval(updateTaskTimer, 100);
+
+                // Reset class durations
+                for (let className in classDurations) {
+                    if (classDurations.hasOwnProperty(className)) {
+                        classDurations[className] = 0;
+                    }
+                }
+
+                // Initialize real-time bar chart with zero probabilities
+                const initialLabels = Object.keys(classDurations);
+                const initialData = initialLabels.map(() => 0);
+                updateBarChart(initialLabels, initialData);
+
+                // Reset feedback message
+                feedbackMessage.textContent = "";
+
+                console.log("Task started.");
+            });
         });
 
         // Event Listener for End Task Button
@@ -471,68 +622,32 @@ HTML_PAGE = """
             if (webcam) {
                 webcam.stop();
                 webcam = null;
-                console.log("Webcam stopped.");
+                console.log("Main webcam stopped.");
             }
 
             // Stop the timer
             clearInterval(taskTimerInterval);
             const totalTime = ((performance.now() - taskStartTime) / 1000).toFixed(2);
 
-            // Calculate Total Duration with >80% Similarity
-            let totalHighSimilarityDuration = 0;
-            for (let className in classDurations) {
-                if (classDurations.hasOwnProperty(className)) {
-                    totalHighSimilarityDuration += classDurations[className];
-                }
-            }
-            totalHighSimilarityDuration = totalHighSimilarityDuration.toFixed(2);
-
-            // Prepare summary data: Show how long each class was over 80% similarity
-            const summaryData = Object.entries(classDurations)
-                .map(([className, duration]) => ({
-                    className,
-                    duration: duration.toFixed(2),
-                    occurrences: classOccurrences[className] || 0
-                }));
-
-            // Sort classes by duration in descending order
-            summaryData.sort((a, b) => b.duration - a.duration);
-
-            // Generate summary HTML
+            // Prepare summary data: Show total duration of the task
             let summaryHTML = `
-                <p><strong>Total Duration with >80% Similarity:</strong> ${totalHighSimilarityDuration} seconds</p>
-                <p><strong>Duration Each Class Had >80% Similarity:</strong></p>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Class Name</th>
-                            <th>Total Duration (s)</th>
-                            <th>Number of Times >2s</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-            `;
-            summaryData.forEach(item => {
-                summaryHTML += `
-                    <tr>
-                        <td>${item.className}</td>
-                        <td>${item.duration}</td>
-                        <td>${item.occurrences}</td>
-                    </tr>
-                `;
-            });
-            summaryHTML += `
-                    </tbody>
-                </table>
+                <p><strong>Total Duration:</strong> ${totalTime} seconds</p>
             `;
 
             summaryContent.innerHTML = summaryHTML;
+
+            // Prepare data for summary graph
+            const summaryLabels = Object.keys(classDurations);
+            const summaryData = Object.values(classDurations).map(duration => duration.toFixed(2));
+
+            // Generate summary graph
+            updateSummaryChart(summaryLabels, summaryData);
+
             summarySection.style.display = 'block';
 
             console.log("Task ended. Summary generated.");
+            console.log("Total Time:", totalTime);
             console.log("Class Durations:", classDurations);
-            console.log("Class Occurrences:", classOccurrences);
-            console.log("Total High Similarity Duration:", totalHighSimilarityDuration);
 
             // Hide task section elements
             taskSection.classList.add('hidden');
@@ -546,19 +661,24 @@ HTML_PAGE = """
             startTaskButton.classList.remove('hidden');
             endTaskButton.classList.add('hidden');
             taskTimer.textContent = "Time: 0.00s";
+            feedbackMessage.textContent = "";
 
-            // Reset bar chart
+            // Reset real-time bar chart
             if (barChart) {
                 barChart.destroy();
                 barChartInitialized = false;
             }
 
-            // Reset class durations, streaks, and occurrences
+            // Reset summary chart
+            if (summaryChart) {
+                summaryChart.destroy();
+                summaryChartInitialized = false;
+            }
+
+            // Reset class durations
             for (let className in classDurations) {
                 if (classDurations.hasOwnProperty(className)) {
                     classDurations[className] = 0;
-                    classStreaks[className] = 0;
-                    classOccurrences[className] = 0;
                 }
             }
 
@@ -568,6 +688,8 @@ HTML_PAGE = """
             feedback.textContent = "";
             feedback.className = "";
             startTaskButton.disabled = true;
+            testWebcamButton.disabled = true;
+            stopTestWebcamButton.classList.add('hidden');
 
             console.log("Application restarted.");
         });
