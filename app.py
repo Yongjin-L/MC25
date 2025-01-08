@@ -6,282 +6,487 @@ app.config['SECRET_KEY'] = 'your_secret_key_here'
 
 HTML_PAGE = """
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Pose Detection Exercise Assistant</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      text-align: center;
-      margin: 30px;
-      background: #f0f0f0;
-    }
-    h1 {
-      margin-bottom: 10px;
-    }
-    h2 {
-      margin-top: 0;
-      margin-bottom: 20px;
-      font-weight: normal;
-      color: #555;
-    }
-    .btn {
-      padding: 10px 20px;
-      font-size: 1rem;
-      margin: 5px;
-      cursor: pointer;
-    }
-    .video-container {
-      position: relative;
-      display: inline-block;
-      background: #000;
-    }
-    #camera {
-      width: 640px;
-      height: 480px;
-      background: #222;
-      z-index: 1;
-    }
-    #overlay {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      color: #fff;
-      font-weight: bold;
-      text-shadow: 1px 1px #000;
-      z-index: 2;
-    }
-    #modelStatus {
-      margin-top: 10px;
-      font-weight: bold;
-      color: red;
-    }
-    #countdown {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      font-size: 2em;
-      color: #FF0000;
-      font-weight: bold;
-      text-shadow: 1px 1px #000;
-      z-index: 3;
-    }
-    #summaryContainer {
-      margin-top: 30px;
-      text-align: left;
-      display: inline-block;
-    }
-    #summaryContainer p {
-      margin: 5px 0;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <title>Custom Pose Duration Tracker</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            background-color: #f7f7f7;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+        }
+        #model-section, #task-section, #summary-section {
+            margin: 20px auto;
+            padding: 20px;
+            width: 90%;
+            max-width: 800px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        #model-section input {
+            width: 80%;
+            padding: 10px;
+            font-size: 1em;
+            margin-bottom: 10px;
+        }
+        #model-section button, #task-section button, #summary-section button {
+            padding: 10px 20px;
+            font-size: 1em;
+            margin: 5px;
+            cursor: pointer;
+        }
+        #feedback {
+            margin-top: 10px;
+            font-weight: bold;
+        }
+        #canvas-container {
+            position: relative;
+            display: inline-block;
+            margin-top: 20px;
+        }
+        #canvas {
+            border: 2px solid #ccc;
+            border-radius: 8px;
+            width: 800px;
+            height: 600px;
+        }
+        #overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #fff;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 1.2em;
+            text-align: left;
+        }
+        #summary-section {
+            display: none;
+        }
+        #summary-section h2 {
+            color: #444;
+        }
+        #summary-content {
+            text-align: left;
+            margin-top: 10px;
+        }
+        .hidden {
+            display: none;
+        }
+        .error {
+            color: red;
+        }
+        .success {
+            color: green;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        table, th, td {
+            border: 1px solid #ccc;
+        }
+        th, td {
+            padding: 10px;
+            text-align: center;
+        }
+        th {
+            background-color: #f0f0f0;
+        }
+        @media (max-width: 820px) {
+            #canvas {
+                width: 100%;
+                height: auto;
+            }
+            #model-section input {
+                width: 100%;
+                margin-bottom: 10px;
+            }
+            #model-section button, #task-section button, #summary-section button {
+                width: 100%;
+                margin: 5px 0;
+            }
+        }
+    </style>
 </head>
 <body>
-  <h1>Pose Detection Exercise Assistant</h1>
-  <h2>MC25 KIN217 with Mr. Lee</h2>
+    <h1>Custom Pose Duration Tracker</h1>
 
-  <div>
-    <input type="file" id="modelFiles" multiple accept=".json,.bin" />
-    <button class="btn" id="modelLoadButton">Model Load</button>
-    <div id="modelStatus"></div>
-  </div>
-  <div>
-    <button class="btn" id="openCameraButton">Open Camera</button>
-    <button class="btn" id="startTaskButton">Start Task</button>
-    <button class="btn" id="stopTaskButton" disabled>Stop Task</button>
-  </div>
+    <!-- Model URL Input Section -->
+    <div id="model-section">
+        <h2>Load Your Teachable Machine Pose Model</h2>
+        <input type="text" id="model-url" placeholder="Enter model URL e.g., https://teachablemachine.withgoogle.com/models/j3EtRGf_g/">
+        <br>
+        <button type="button" id="check-model-button">Check Model URL</button>
+        <div id="feedback"></div>
+    </div>
 
-  <div class="video-container">
-    <video id="camera" autoplay muted playsinline></video>
-    <div id="countdown"></div>
-    <div id="overlay"></div>
-  </div>
+    <!-- Task Management Section -->
+    <div id="task-section" class="hidden">
+        <h2>Pose Matching Task</h2>
+        <div id="canvas-container">
+            <canvas id="canvas"></canvas>
+            <div id="overlay">
+                <div id="task-timer">Time: 0.00s</div>
+                <div id="best-match">Best Match: N/A</div>
+            </div>
+        </div>
+        <br>
+        <button type="button" id="start-task-button" disabled>Start Task</button>
+        <button type="button" id="end-task-button" class="hidden">End Task</button>
+    </div>
 
-  <div id="summaryContainer" style="display:none;">
-    <h2>Task Summary</h2>
-    <div id="summaryContent"></div>
-  </div>
+    <!-- Summary Section -->
+    <div id="summary-section">
+        <h2>Task Summary</h2>
+        <div id="summary-content">
+            <!-- Summary details will be populated here -->
+        </div>
+        <button type="button" id="restart-button">Restart</button>
+    </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-  <script>
-    const modelFilesInput = document.getElementById('modelFiles');
-    const modelLoadButton = document.getElementById('modelLoadButton');
-    const modelStatus = document.getElementById('modelStatus');
-    const openCameraButton = document.getElementById('openCameraButton');
-    const startTaskButton = document.getElementById('startTaskButton');
-    const stopTaskButton = document.getElementById('stopTaskButton');
-    const camera = document.getElementById('camera');
-    const countdownElem = document.getElementById('countdown');
-    const overlayElem = document.getElementById('overlay');
-    const summaryContainer = document.getElementById('summaryContainer');
-    const summaryContent = document.getElementById('summaryContent');
+    <!-- TensorFlow.js and Teachable Machine Pose libraries (Using Version 0.8) -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
 
-    let selectedFiles = [];
-    let model = null;
-    let metadata = null;
-    let inferenceInterval = null;
-    let countdownInterval = null;
-    let timeCounter = 0;
-    let classStats = {};
+    <script type="text/javascript">
+        // Initial Variables
+        let model, webcam, ctx, maxPredictions;
+        let taskTimerInterval;
+        let taskStartTime = null;
+        let bestMatch = { className: 'N/A', probability: 0 };
+        let classDurations = {}; // Object to track durations per class
 
-    modelFilesInput.addEventListener('change', e => {
-      selectedFiles = Array.from(e.target.files);
-      modelStatus.textContent = "Files selected.";
-      modelStatus.style.color = "orange";
-    });
+        // DOM Elements
+        const modelUrlInput = document.getElementById('model-url');
+        const checkModelButton = document.getElementById('check-model-button');
+        const feedback = document.getElementById('feedback');
+        const taskSection = document.getElementById('task-section');
+        const canvas = document.getElementById('canvas');
+        const ctxCanvas = canvas.getContext('2d');
+        const overlay = document.getElementById('overlay');
+        const taskTimer = document.getElementById('task-timer');
+        const bestMatchDisplay = document.getElementById('best-match');
+        const startTaskButton = document.getElementById('start-task-button');
+        const endTaskButton = document.getElementById('end-task-button');
+        const summarySection = document.getElementById('summary-section');
+        const summaryContent = document.getElementById('summary-content');
+        const restartButton = document.getElementById('restart-button');
 
-    modelLoadButton.addEventListener('click', async () => {
-      if (!selectedFiles || selectedFiles.length < 2) {
-        alert("Please select model.json and weights.bin!");
-        return;
-      }
-      try {
-        modelStatus.textContent = "Loading model...";
-        modelStatus.style.color = "orange";
-        model = await loadModelAndWeights(selectedFiles);
-        modelStatus.textContent = "Model loaded successfully!";
-        modelStatus.style.color = "green";
-      } catch (err) {
-        modelStatus.textContent = "Error loading model!";
-        modelStatus.style.color = "red";
-        console.error(err);
-      }
-    });
+        // Function to validate and load the model
+        async function loadModel(modelURL) {
+            try {
+                // Ensure the URL ends with a slash
+                if (!modelURL.endsWith('/')) {
+                    modelURL += '/';
+                }
 
-    openCameraButton.addEventListener('click', async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        camera.srcObject = stream;
-      } catch (err) {
-        alert("Could not access camera. Please allow permissions.");
-      }
-    });
+                console.log(`Loading model from ${modelURL}`);
 
-    startTaskButton.addEventListener('click', () => {
-      if (!model) {
-        alert("Please load your model first!");
-        return;
-      }
-      timeCounter = 0;
-      classStats = {};
-      overlayElem.textContent = "";
-      summaryContainer.style.display = "none";
-      startTaskButton.disabled = true;
-      stopTaskButton.disabled = true;
+                const modelJSON = modelURL + "model.json";
+                const metadataJSON = modelURL + "metadata.json";
 
-      let countdownVal = 5;
-      countdownElem.textContent = countdownVal;
+                // Attempt to load the model
+                model = await tmPose.load(modelJSON, metadataJSON);
+                maxPredictions = model.getTotalClasses();
 
-      countdownInterval = setInterval(() => {
-        countdownVal--;
-        if (countdownVal > 0) {
-          countdownElem.textContent = countdownVal;
-        } else {
-          clearInterval(countdownInterval);
-          countdownElem.textContent = "";
-          stopTaskButton.disabled = false;
-          startInference();
-        }
-      }, 1000);
-    });
+                console.log(`Model loaded with ${maxPredictions} classes.`);
 
-    stopTaskButton.addEventListener('click', () => {
-      if (inferenceInterval) {
-        clearInterval(inferenceInterval);
-      }
-      startTaskButton.disabled = false;
-      stopTaskButton.disabled = true;
-      overlayElem.textContent = "";
-      showSummary();
-    });
+                // Initialize classDurations
+                classDurations = {};
+                for (let i = 0; i < maxPredictions; i++) {
+                    let className = null;
 
-    function startInference() {
-      inferenceInterval = setInterval(() => {
-        timeCounter++;
-        const inputTensor = tf.randomNormal([1, 14739]);
-        const predictions = model.predict(inputTensor);
-        predictions.data().then(data => {
-          let bestIndex = 0;
-          let bestScore = data[0];
-          for (let i = 1; i < data.length; i++) {
-            if (data[i] > bestScore) {
-              bestScore = data[i];
-              bestIndex = i;
+                    // Attempt to retrieve class names from model.classes
+                    if (model.classes && model.classes.length > 0) {
+                        className = model.classes[i];
+                    }
+
+                    // Fallback: Attempt to retrieve class names from model.labels
+                    if (!className && model.labels && model.labels.length > 0) {
+                        className = model.labels[i];
+                    }
+
+                    // Fallback: If className is still not found, use prediction class names later
+                    if (!className) {
+                        console.warn(`Class name at index ${i} is undefined. It will be tracked dynamically.`);
+                        continue;
+                    }
+
+                    classDurations[className] = 0; // Initialize duration to 0
+                }
+
+                // If successful, return true
+                return true;
+            } catch (error) {
+                console.error("Error loading model:", error);
+                feedback.textContent = `Error loading model: ${error.message}`;
+                feedback.className = "error";
+                return false;
             }
-          }
-          const confidence = (bestScore * 100).toFixed(1);
-          let className = `Class ${bestIndex}`;
-          if (metadata && metadata.labels && metadata.labels[bestIndex]) {
-            className = metadata.labels[bestIndex];
-          }
-          overlayElem.textContent = `Time: ${timeCounter}s | ${className} (${confidence}%)`;
-          if (!classStats[className]) {
-            classStats[className] = { seconds: 0, sumConfidence: 0, count: 0 };
-          }
-          classStats[className].seconds++;
-          classStats[className].sumConfidence += parseFloat(confidence);
-          classStats[className].count++;
-        });
-        predictions.dispose();
-        inputTensor.dispose();
-      }, 1000);
-    }
-
-    function showSummary() {
-      let html = `<p><strong>Total Task Time:</strong> ${timeCounter} seconds</p>`;
-      for (const cname in classStats) {
-        const stats = classStats[cname];
-        const avgConf = (stats.sumConfidence / stats.count).toFixed(1);
-        html += `<p><strong>${cname}</strong>: ${stats.seconds}s, Avg Confidence: ${avgConf}%</p>`;
-      }
-      summaryContent.innerHTML = html;
-      summaryContainer.style.display = "block";
-    }
-
-    async function loadModelAndWeights(files) {
-      let modelFile = null, weightsFile = null, metaFile = null;
-      for (const f of files) {
-        const name = f.name.toLowerCase();
-        if (name.endsWith("model.json")) modelFile = f;
-        else if (name.endsWith(".bin")) weightsFile = f;
-        else if (name.endsWith("metadata.json")) metaFile = f;
-      }
-      if (!modelFile || !weightsFile) throw new Error("model.json or weights.bin missing!");
-
-      if (metaFile) metadata = await parseMetadataFile(metaFile);
-      const modelAndWeights = [modelFile, weightsFile];
-      try {
-        const gModel = await tf.loadGraphModel(tf.io.browserFiles(modelAndWeights));
-        return gModel;
-      } catch (gErr) {
-        try {
-          const lModel = await tf.loadLayersModel(tf.io.browserFiles(modelAndWeights));
-          return lModel;
-        } catch (lErr) {
-          throw lErr;
         }
-      }
-    }
 
-    function parseMetadataFile(file) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = evt => {
-          try {
-            const json = JSON.parse(evt.target.result);
-            resolve(json);
-          } catch (err) {
-            reject(err);
-          }
-        };
-        reader.onerror = err => reject(err);
-        reader.readAsText(file);
-      });
-    }
-  </script>
+        // Function to initialize the webcam
+        async function setupWebcam() {
+            const width = 800;
+            const height = 600;
+            const flip = true;
+            webcam = new tmPose.Webcam(width, height, flip);
+            try {
+                console.log("Setting up webcam...");
+                await webcam.setup(); // Request webcam access
+                await webcam.play();
+                console.log("Webcam started.");
+                window.requestAnimationFrame(loop);
+                return true;
+            } catch (error) {
+                console.error("Error accessing webcam:", error);
+                feedback.textContent = `Error accessing webcam: ${error.message}`;
+                feedback.className = "error";
+                return false;
+            }
+        }
+
+        // Function to update the timer
+        function updateTaskTimer() {
+            const currentTime = performance.now();
+            const elapsed = ((currentTime - taskStartTime) / 1000).toFixed(2);
+            taskTimer.textContent = `Time: ${elapsed}s`;
+        }
+
+        // Main prediction loop
+        async function loop() {
+            if (!webcam) return;
+
+            webcam.update(); // Update the webcam frame
+            await predict();
+            window.requestAnimationFrame(loop);
+        }
+
+        // Prediction function
+        async function predict() {
+            if (!model || !webcam.canvas) return;
+
+            try {
+                const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+                const prediction = await model.predict(posenetOutput);
+
+                // Log predictions for debugging
+                console.log("Predictions:", prediction);
+
+                // Determine the best prediction
+                let topPrediction = prediction.reduce((max, pred) => pred.probability > max.probability ? pred : max, prediction[0]);
+
+                // Update best match if current prediction is better
+                if (topPrediction.probability > bestMatch.probability) {
+                    bestMatch = {
+                        className: topPrediction.className,
+                        probability: (topPrediction.probability * 100).toFixed(2) + "%"
+                    };
+                    bestMatchDisplay.textContent = `Best Match: ${bestMatch.className} (${bestMatch.probability})`;
+                    console.log(`New best match: ${bestMatch.className} with ${bestMatch.probability} confidence.`);
+                }
+
+                // Track durations for classes exceeding 80% similarity
+                prediction.forEach(pred => {
+                    if (pred.probability >= 0.8) {
+                        // If className exists in classDurations, increment its duration
+                        if (classDurations.hasOwnProperty(pred.className)) {
+                            classDurations[pred.className] += 0.1; // Assuming loop runs every 100ms
+                            console.log(`Class "${pred.className}" exceeded 80% similarity. Total duration: ${classDurations[pred.className].toFixed(2)}s`);
+                        } else {
+                            // If className not tracked yet, initialize it
+                            classDurations[pred.className] = 0.1;
+                            console.log(`Class "${pred.className}" exceeded 80% similarity. Total duration: ${classDurations[pred.className].toFixed(2)}s`);
+                        }
+                    }
+                });
+
+                // Draw the pose
+                drawPose(pose, ctxCanvas);
+            } catch (error) {
+                console.error("Error during prediction:", error);
+                feedback.textContent = `Error during prediction: ${error.message}`;
+                feedback.className = "error";
+            }
+        }
+
+        // Function to draw pose keypoints and skeleton
+        function drawPose(pose, ctx) {
+            if (webcam.canvas) {
+                ctx.drawImage(webcam.canvas, 0, 0, canvas.width, canvas.height);
+                if (pose) {
+                    const minPartConfidence = 0.5;
+                    tmPose.drawKeypoints(pose.keypoints, minPartConfidence, ctx);
+                    tmPose.drawSkeleton(pose.keypoints, minPartConfidence, ctx);
+                }
+            }
+        }
+
+        // Event Listener for Check Model Button
+        checkModelButton.addEventListener('click', async () => {
+            const modelURL = modelUrlInput.value.trim();
+            if (!modelURL) {
+                feedback.textContent = "Please enter a model URL.";
+                feedback.className = "error";
+                return;
+            }
+
+            feedback.textContent = "Checking model URL...";
+            feedback.className = "";
+
+            const isValid = await loadModel(modelURL);
+
+            if (isValid) {
+                feedback.textContent = "Model loaded successfully!";
+                feedback.className = "success";
+                taskSection.classList.remove('hidden');
+                startTaskButton.disabled = false;
+            } else {
+                feedback.textContent = "Failed to load model. Please check the URL.";
+                feedback.className = "error";
+                taskSection.classList.add('hidden');
+                startTaskButton.disabled = true;
+            }
+        });
+
+        // Event Listener for Start Task Button
+        startTaskButton.addEventListener('click', async () => {
+            // Hide feedback and model section
+            document.getElementById('model-section').classList.add('hidden');
+
+            // Initialize webcam
+            const webcamSetupSuccess = await setupWebcam();
+            if (!webcamSetupSuccess) {
+                return;
+            }
+
+            // Show task section elements
+            startTaskButton.classList.add('hidden');
+            endTaskButton.classList.remove('hidden');
+
+            // Start the timer
+            taskStartTime = performance.now();
+            taskTimerInterval = setInterval(updateTaskTimer, 100);
+
+            // Reset best match
+            bestMatch = { className: 'N/A', probability: 0 };
+            bestMatchDisplay.textContent = "Best Match: N/A";
+
+            // Reset class durations
+            for (let className in classDurations) {
+                if (classDurations.hasOwnProperty(className)) {
+                    classDurations[className] = 0;
+                }
+            }
+
+            console.log("Task started.");
+        });
+
+        // Event Listener for End Task Button
+        endTaskButton.addEventListener('click', () => {
+            // Stop the webcam
+            if (webcam) {
+                webcam.stop();
+                webcam = null;
+                console.log("Webcam stopped.");
+            }
+
+            // Stop the timer
+            clearInterval(taskTimerInterval);
+            const totalTime = ((performance.now() - taskStartTime) / 1000).toFixed(2);
+
+            // Prepare summary data: Filter classes with duration >= 0.8s (assuming each increment is 0.1s, 0.8s = 8 increments)
+            const filteredClasses = Object.entries(classDurations)
+                .filter(([className, duration]) => duration >= 0.8)
+                .map(([className, duration]) => ({ className, duration: duration.toFixed(2) }));
+
+            // Sort classes by duration in descending order
+            filteredClasses.sort((a, b) => b.duration - a.duration);
+
+            // Generate summary HTML
+            let summaryHTML = `
+                <p><strong>Total Task Time:</strong> ${totalTime} seconds</p>
+            `;
+
+            if (filteredClasses.length > 0) {
+                summaryHTML += `
+                    <p><strong>Classes with >80% Similarity:</strong></p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Class Name</th>
+                                <th>Total Duration (s)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                filteredClasses.forEach(item => {
+                    summaryHTML += `
+                        <tr>
+                            <td>${item.className}</td>
+                            <td>${item.duration}</td>
+                        </tr>
+                    `;
+                });
+                summaryHTML += `
+                        </tbody>
+                    </table>
+                `;
+            } else {
+                summaryHTML += `<p>No classes reached 80% similarity during the task.</p>`;
+            }
+
+            summaryContent.innerHTML = summaryHTML;
+            summarySection.style.display = 'block';
+
+            console.log("Task ended. Summary generated.");
+            console.log("Class Durations:", classDurations);
+
+            // Hide task section elements
+            taskSection.classList.add('hidden');
+        });
+
+        // Event Listener for Restart Button
+        restartButton.addEventListener('click', () => {
+            // Reset variables
+            summarySection.style.display = 'none';
+            taskSection.classList.remove('hidden');
+            startTaskButton.classList.remove('hidden');
+            endTaskButton.classList.add('hidden');
+            taskTimer.textContent = "Time: 0.00s";
+            bestMatchDisplay.textContent = "Best Match: N/A";
+
+            // Reset model section
+            document.getElementById('model-section').classList.remove('hidden');
+            modelUrlInput.value = "";
+            feedback.textContent = "";
+            feedback.className = "";
+            startTaskButton.disabled = true;
+
+            console.log("Application restarted.");
+        });
+
+        // Initialize the application on page load
+        window.addEventListener('load', () => {
+            // Initially hide task and summary sections
+            taskSection.classList.add('hidden');
+            summarySection.style.display = 'none';
+            console.log("Application loaded. Awaiting user input.");
+        });
+    </script>
 </body>
 </html>
+
 
 """
 
