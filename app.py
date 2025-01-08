@@ -1,4 +1,4 @@
-import os
+import os 
 from flask import Flask, render_template_string
 
 app = Flask(__name__)
@@ -10,6 +10,7 @@ HTML_PAGE = """
 <head>
     <meta charset="UTF-8">
     <title>Pose Duration Tracker with Mr. Lee</title>
+    <subtitle>KIN217 for Middle College</subtitle>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -125,7 +126,7 @@ HTML_PAGE = """
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-    <h1>Custom Pose Duration Tracker</h1>
+    <h1>Pose Duration Tracker with Mr. Lee</h1>
 
     <!-- Model URL Input Section -->
     <div id="model-section">
@@ -147,7 +148,7 @@ HTML_PAGE = """
             </div>
         </div>
         <div id="bar-chart-container">
-            <canvas id="bar-chart"></canvas>
+            <canvas id="bar-chart" style="height:300px;"></canvas>
         </div>
         <br>
         <button type="button" id="start-task-button" disabled>Start Task</button>
@@ -173,6 +174,8 @@ HTML_PAGE = """
         let taskTimerInterval;
         let taskStartTime = null;
         let classDurations = {}; // Object to track durations per class
+        let classStreaks = {}; // Object to track current streak per class
+        let classOccurrences = {}; // Object to track occurrences per class
         let barChart; // Chart.js instance
         let barChartInitialized = false; // Flag to initialize chart once
 
@@ -211,8 +214,10 @@ HTML_PAGE = """
 
                 console.log(`Model loaded with ${maxPredictions} classes.`);
 
-                // Initialize classDurations
+                // Initialize classDurations, classStreaks, and classOccurrences
                 classDurations = {};
+                classStreaks = {};
+                classOccurrences = {};
                 for (let i = 0; i < maxPredictions; i++) {
                     let className = null;
 
@@ -233,6 +238,8 @@ HTML_PAGE = """
                     }
 
                     classDurations[className] = 0; // Initialize duration to 0
+                    classStreaks[className] = 0; // Initialize streak to 0
+                    classOccurrences[className] = 0; // Initialize occurrences to 0
                 }
 
                 // If successful, return true
@@ -355,9 +362,20 @@ HTML_PAGE = """
                     // Increment duration for the top high confidence class
                     if (classDurations.hasOwnProperty(topHighConfidence.className)) {
                         classDurations[topHighConfidence.className] += 0.1; // Assuming loop runs every 100ms
+
+                        // Increment streak
+                        classStreaks[topHighConfidence.className] += 0.1;
+
+                        // Check if streak exceeds 2 seconds
+                        if (classStreaks[topHighConfidence.className] >= 2.0) {
+                            classOccurrences[topHighConfidence.className] += 1;
+                            classStreaks[topHighConfidence.className] = 0; // Reset streak after counting
+                        }
                     } else {
                         // Initialize if not present
                         classDurations[topHighConfidence.className] = 0.1;
+                        classStreaks[topHighConfidence.className] = 0.1;
+                        classOccurrences[topHighConfidence.className] = 0;
                     }
 
                     console.log(`Class "${topHighConfidence.className}" exceeded 80% similarity. Total duration: ${classDurations[topHighConfidence.className].toFixed(2)}s`);
@@ -430,10 +448,12 @@ HTML_PAGE = """
             taskStartTime = performance.now();
             taskTimerInterval = setInterval(updateTaskTimer, 100);
 
-            // Reset class durations
+            // Reset class durations, streaks, and occurrences
             for (let className in classDurations) {
                 if (classDurations.hasOwnProperty(className)) {
                     classDurations[className] = 0;
+                    classStreaks[className] = 0;
+                    classOccurrences[className] = 0;
                 }
             }
 
@@ -458,22 +478,36 @@ HTML_PAGE = """
             clearInterval(taskTimerInterval);
             const totalTime = ((performance.now() - taskStartTime) / 1000).toFixed(2);
 
+            // Calculate Total Duration with >80% Similarity
+            let totalHighSimilarityDuration = 0;
+            for (let className in classDurations) {
+                if (classDurations.hasOwnProperty(className)) {
+                    totalHighSimilarityDuration += classDurations[className];
+                }
+            }
+            totalHighSimilarityDuration = totalHighSimilarityDuration.toFixed(2);
+
             // Prepare summary data: Show how long each class was over 80% similarity
             const summaryData = Object.entries(classDurations)
-                .map(([className, duration]) => ({ className, duration: duration.toFixed(2) }));
+                .map(([className, duration]) => ({
+                    className,
+                    duration: duration.toFixed(2),
+                    occurrences: classOccurrences[className] || 0
+                }));
 
             // Sort classes by duration in descending order
             summaryData.sort((a, b) => b.duration - a.duration);
 
             // Generate summary HTML
             let summaryHTML = `
-                <p><strong>Total Task Time:</strong> ${totalTime} seconds</p>
+                <p><strong>Total Duration with >80% Similarity:</strong> ${totalHighSimilarityDuration} seconds</p>
                 <p><strong>Duration Each Class Had >80% Similarity:</strong></p>
                 <table>
                     <thead>
                         <tr>
                             <th>Class Name</th>
                             <th>Total Duration (s)</th>
+                            <th>Number of Times >2s</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -483,6 +517,7 @@ HTML_PAGE = """
                     <tr>
                         <td>${item.className}</td>
                         <td>${item.duration}</td>
+                        <td>${item.occurrences}</td>
                     </tr>
                 `;
             });
@@ -496,6 +531,8 @@ HTML_PAGE = """
 
             console.log("Task ended. Summary generated.");
             console.log("Class Durations:", classDurations);
+            console.log("Class Occurrences:", classOccurrences);
+            console.log("Total High Similarity Duration:", totalHighSimilarityDuration);
 
             // Hide task section elements
             taskSection.classList.add('hidden');
@@ -516,10 +553,12 @@ HTML_PAGE = """
                 barChartInitialized = false;
             }
 
-            // Reset class durations
+            // Reset class durations, streaks, and occurrences
             for (let className in classDurations) {
                 if (classDurations.hasOwnProperty(className)) {
                     classDurations[className] = 0;
+                    classStreaks[className] = 0;
+                    classOccurrences[className] = 0;
                 }
             }
 
