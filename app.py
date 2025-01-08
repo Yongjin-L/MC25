@@ -9,7 +9,7 @@ HTML_PAGE = """
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Custom Pose Duration Tracker</title>
+    <title>Pose Duration Tracker with Mr. Lee</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -51,11 +51,12 @@ HTML_PAGE = """
             display: inline-block;
             margin-top: 20px;
         }
+        /* Adjusted canvas size for better user experience */
         #canvas {
             border: 2px solid #ccc;
             border-radius: 8px;
-            width: 800px;
-            height: 600px;
+            width: 640px;
+            height: 480px;
         }
         #overlay {
             position: absolute;
@@ -67,6 +68,9 @@ HTML_PAGE = """
             border-radius: 5px;
             font-size: 1.2em;
             text-align: left;
+        }
+        #bar-chart-container {
+            margin-top: 20px;
         }
         #summary-section {
             display: none;
@@ -102,7 +106,7 @@ HTML_PAGE = """
         th {
             background-color: #f0f0f0;
         }
-        @media (max-width: 820px) {
+        @media (max-width: 700px) {
             #canvas {
                 width: 100%;
                 height: auto;
@@ -117,6 +121,8 @@ HTML_PAGE = """
             }
         }
     </style>
+    <!-- Include Chart.js from CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <h1>Custom Pose Duration Tracker</h1>
@@ -137,8 +143,11 @@ HTML_PAGE = """
             <canvas id="canvas"></canvas>
             <div id="overlay">
                 <div id="task-timer">Time: 0.00s</div>
-                <div id="best-match">Best Match: N/A</div>
+                <!-- Best Match Display Removed -->
             </div>
+        </div>
+        <div id="bar-chart-container">
+            <canvas id="bar-chart"></canvas>
         </div>
         <br>
         <button type="button" id="start-task-button" disabled>Start Task</button>
@@ -163,8 +172,9 @@ HTML_PAGE = """
         let model, webcam, ctx, maxPredictions;
         let taskTimerInterval;
         let taskStartTime = null;
-        let bestMatch = { className: 'N/A', probability: 0 };
         let classDurations = {}; // Object to track durations per class
+        let barChart; // Chart.js instance
+        let barChartInitialized = false; // Flag to initialize chart once
 
         // DOM Elements
         const modelUrlInput = document.getElementById('model-url');
@@ -175,12 +185,12 @@ HTML_PAGE = """
         const ctxCanvas = canvas.getContext('2d');
         const overlay = document.getElementById('overlay');
         const taskTimer = document.getElementById('task-timer');
-        const bestMatchDisplay = document.getElementById('best-match');
         const startTaskButton = document.getElementById('start-task-button');
         const endTaskButton = document.getElementById('end-task-button');
         const summarySection = document.getElementById('summary-section');
         const summaryContent = document.getElementById('summary-content');
         const restartButton = document.getElementById('restart-button');
+        const barChartCanvas = document.getElementById('bar-chart').getContext('2d');
 
         // Function to validate and load the model
         async function loadModel(modelURL) {
@@ -237,8 +247,8 @@ HTML_PAGE = """
 
         // Function to initialize the webcam
         async function setupWebcam() {
-            const width = 800;
-            const height = 600;
+            const width = 640; // Standard webcam width
+            const height = 480; // Standard webcam height
             const flip = true;
             webcam = new tmPose.Webcam(width, height, flip);
             try {
@@ -246,6 +256,11 @@ HTML_PAGE = """
                 await webcam.setup(); // Request webcam access
                 await webcam.play();
                 console.log("Webcam started.");
+
+                // Dynamically set canvas dimensions to match webcam video
+                canvas.width = webcam.canvas.width;
+                canvas.height = webcam.canvas.height;
+
                 window.requestAnimationFrame(loop);
                 return true;
             } catch (error) {
@@ -261,6 +276,45 @@ HTML_PAGE = """
             const currentTime = performance.now();
             const elapsed = ((currentTime - taskStartTime) / 1000).toFixed(2);
             taskTimer.textContent = `Time: ${elapsed}s`;
+        }
+
+        // Function to initialize the bar chart
+        function initializeBarChart(labels, initialData) {
+            barChart = new Chart(barChartCanvas, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Pose Probability (%)',
+                        data: initialData,
+                        backgroundColor: 'rgba(54, 162, 235, 0.7)',
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            });
+        }
+
+        // Function to update the bar chart
+        function updateBarChart(labels, data) {
+            if (!barChartInitialized) {
+                initializeBarChart(labels, data);
+                barChartInitialized = true;
+            } else {
+                barChart.data.labels = labels;
+                barChart.data.datasets[0].data = data;
+                barChart.update();
+            }
         }
 
         // Main prediction loop
@@ -283,33 +337,31 @@ HTML_PAGE = """
                 // Log predictions for debugging
                 console.log("Predictions:", prediction);
 
-                // Determine the best prediction
-                let topPrediction = prediction.reduce((max, pred) => pred.probability > max.probability ? pred : max, prediction[0]);
+                // Prepare data for bar chart
+                const labels = prediction.map(pred => pred.className);
+                const data = prediction.map(pred => (pred.probability * 100).toFixed(2));
 
-                // Update best match if current prediction is better
-                if (topPrediction.probability > bestMatch.probability) {
-                    bestMatch = {
-                        className: topPrediction.className,
-                        probability: (topPrediction.probability * 100).toFixed(2) + "%"
-                    };
-                    bestMatchDisplay.textContent = `Best Match: ${bestMatch.className} (${bestMatch.probability})`;
-                    console.log(`New best match: ${bestMatch.className} with ${bestMatch.probability} confidence.`);
-                }
+                // Update the bar chart with current probabilities
+                updateBarChart(labels, data);
 
                 // Track durations for classes exceeding 80% similarity
-                prediction.forEach(pred => {
-                    if (pred.probability >= 0.8) {
-                        // If className exists in classDurations, increment its duration
-                        if (classDurations.hasOwnProperty(pred.className)) {
-                            classDurations[pred.className] += 0.1; // Assuming loop runs every 100ms
-                            console.log(`Class "${pred.className}" exceeded 80% similarity. Total duration: ${classDurations[pred.className].toFixed(2)}s`);
-                        } else {
-                            // If className not tracked yet, initialize it
-                            classDurations[pred.className] = 0.1;
-                            console.log(`Class "${pred.className}" exceeded 80% similarity. Total duration: ${classDurations[pred.className].toFixed(2)}s`);
-                        }
+                // Find all classes with probability >= 0.8
+                const highConfidencePredictions = prediction.filter(pred => pred.probability >= 0.8);
+
+                if (highConfidencePredictions.length > 0) {
+                    // Select the prediction with the highest probability
+                    const topHighConfidence = highConfidencePredictions.reduce((max, pred) => pred.probability > max.probability ? pred : max, highConfidencePredictions[0]);
+
+                    // Increment duration for the top high confidence class
+                    if (classDurations.hasOwnProperty(topHighConfidence.className)) {
+                        classDurations[topHighConfidence.className] += 0.1; // Assuming loop runs every 100ms
+                    } else {
+                        // Initialize if not present
+                        classDurations[topHighConfidence.className] = 0.1;
                     }
-                });
+
+                    console.log(`Class "${topHighConfidence.className}" exceeded 80% similarity. Total duration: ${classDurations[topHighConfidence.className].toFixed(2)}s`);
+                }
 
                 // Draw the pose
                 drawPose(pose, ctxCanvas);
@@ -378,16 +430,17 @@ HTML_PAGE = """
             taskStartTime = performance.now();
             taskTimerInterval = setInterval(updateTaskTimer, 100);
 
-            // Reset best match
-            bestMatch = { className: 'N/A', probability: 0 };
-            bestMatchDisplay.textContent = "Best Match: N/A";
-
             // Reset class durations
             for (let className in classDurations) {
                 if (classDurations.hasOwnProperty(className)) {
                     classDurations[className] = 0;
                 }
             }
+
+            // Initialize bar chart with zero probabilities
+            const initialLabels = Object.keys(classDurations);
+            const initialData = initialLabels.map(() => 0);
+            updateBarChart(initialLabels, initialData);
 
             console.log("Task started.");
         });
@@ -405,46 +458,38 @@ HTML_PAGE = """
             clearInterval(taskTimerInterval);
             const totalTime = ((performance.now() - taskStartTime) / 1000).toFixed(2);
 
-            // Prepare summary data: Filter classes with duration >= 0.8s (assuming each increment is 0.1s, 0.8s = 8 increments)
-            const filteredClasses = Object.entries(classDurations)
-                .filter(([className, duration]) => duration >= 0.8)
+            // Prepare summary data: Show how long each class was over 80% similarity
+            const summaryData = Object.entries(classDurations)
                 .map(([className, duration]) => ({ className, duration: duration.toFixed(2) }));
 
             // Sort classes by duration in descending order
-            filteredClasses.sort((a, b) => b.duration - a.duration);
+            summaryData.sort((a, b) => b.duration - a.duration);
 
             // Generate summary HTML
             let summaryHTML = `
                 <p><strong>Total Task Time:</strong> ${totalTime} seconds</p>
-            `;
-
-            if (filteredClasses.length > 0) {
-                summaryHTML += `
-                    <p><strong>Classes with >80% Similarity:</strong></p>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Class Name</th>
-                                <th>Total Duration (s)</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                `;
-                filteredClasses.forEach(item => {
-                    summaryHTML += `
+                <p><strong>Duration Each Class Had >80% Similarity:</strong></p>
+                <table>
+                    <thead>
                         <tr>
-                            <td>${item.className}</td>
-                            <td>${item.duration}</td>
+                            <th>Class Name</th>
+                            <th>Total Duration (s)</th>
                         </tr>
-                    `;
-                });
+                    </thead>
+                    <tbody>
+            `;
+            summaryData.forEach(item => {
                 summaryHTML += `
-                        </tbody>
-                    </table>
+                    <tr>
+                        <td>${item.className}</td>
+                        <td>${item.duration}</td>
+                    </tr>
                 `;
-            } else {
-                summaryHTML += `<p>No classes reached 80% similarity during the task.</p>`;
-            }
+            });
+            summaryHTML += `
+                    </tbody>
+                </table>
+            `;
 
             summaryContent.innerHTML = summaryHTML;
             summarySection.style.display = 'block';
@@ -460,11 +505,23 @@ HTML_PAGE = """
         restartButton.addEventListener('click', () => {
             // Reset variables
             summarySection.style.display = 'none';
-            taskSection.classList.remove('hidden');
+            taskSection.classList.add('hidden');
             startTaskButton.classList.remove('hidden');
             endTaskButton.classList.add('hidden');
             taskTimer.textContent = "Time: 0.00s";
-            bestMatchDisplay.textContent = "Best Match: N/A";
+
+            // Reset bar chart
+            if (barChart) {
+                barChart.destroy();
+                barChartInitialized = false;
+            }
+
+            // Reset class durations
+            for (let className in classDurations) {
+                if (classDurations.hasOwnProperty(className)) {
+                    classDurations[className] = 0;
+                }
+            }
 
             // Reset model section
             document.getElementById('model-section').classList.remove('hidden');
