@@ -1,0 +1,7 @@
+[build]
+  base    = "main"
+  command = "pip install -r requirements.txt -t ../functions && echo 'Build complete'"
+  publish = "public"
+
+[functions]
+  directory = "functions"
