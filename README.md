@@ -2,7 +2,7 @@
 
 A web application for tracking pose durations using Teachable Machine pose models. This tool allows users to load custom pose recognition models and measure the time spent in different poses. The code is developed with Claue 3.7 Sonnet and GPT-4o.
 
-**[https://mc25.netlify.app/](https://mc25.netlify.app/)**
+**[https://mc25.onrender.com/](https://mc25.onrender.com/)**
 
 ## Overview
 
