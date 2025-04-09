@@ -2,6 +2,8 @@
 
 A web application for tracking pose durations using Teachable Machine pose models. This tool allows users to load custom pose recognition models and measure the time spent in different poses.
 
+**[https://mc25.netlify.app/](https://mc25.netlify.app/)**
+
 ## Overview
 
 This application enables users to:
@@ -31,19 +33,6 @@ Perfect for physical education, dance instruction, yoga practice, or any activit
 - Webcam access
 - Internet connection (for loading required libraries)
 - A Teachable Machine pose model URL
-
-## Installation
-
-1. Clone this repository or download the source code
-2. Install Flask if not already installed:
-   ```
-   pip install flask
-   ```
-3. Run the application:
-   ```
-   python app.py
-   ```
-4. Open your browser and navigate to `http://localhost:5000`
 
 ## Usage Instructions
 
