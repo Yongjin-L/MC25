@@ -93,7 +93,7 @@ HTML_PAGE = """
         }
         #bar-chart-container {
             margin-top: 20px;
-            width: 160px; /* Made narrower */
+            width: 120px; /* Made even narrower for better fit */
             height: 240px;
         }
         #summary-section {
@@ -182,7 +182,9 @@ HTML_PAGE = """
         <h2>Pose Matching Task</h2>
         <div id="canvas-container">
             <canvas id="webcam-canvas"></canvas>
-            <canvas id="bar-chart"></canvas>
+            <div id="bar-chart-container" class="hidden">
+                <canvas id="bar-chart"></canvas>
+            </div>
             <div id="overlay">
                 <div id="task-timer">Time: 0.00s</div>
                 <div id="current-class">Class: N/A</div>
@@ -222,6 +224,7 @@ HTML_PAGE = """
         let barChartInitialized = false; // Flag to initialize chart once
         let summaryChart; // Summary Chart.js instance
         let summaryChartInitialized = false; // Flag for summary chart
+        let isTaskMode = false; // Flag to track if we're in test mode or task mode
 
         // DOM Elements
         const modelUrlInput = document.getElementById('model-url');
@@ -232,6 +235,7 @@ HTML_PAGE = """
         const taskSection = document.getElementById('task-section');
         const webcamCanvas = document.getElementById('webcam-canvas');
         const ctxWebcamCanvas = webcamCanvas.getContext('2d');
+        const barChartContainer = document.getElementById('bar-chart-container');
         const barChartCanvas = document.getElementById('bar-chart').getContext('2d');
         const overlay = document.getElementById('overlay');
         const taskTimer = document.getElementById('task-timer');
@@ -455,49 +459,58 @@ HTML_PAGE = """
                 // Log predictions for debugging
                 console.log("Predictions:", prediction);
 
-                // Prepare data for real-time bar chart
-                const labels = prediction.map(pred => pred.className);
-                const data = prediction.map(pred => (pred.probability * 100).toFixed(2));
+                // Only update bar chart and track durations in task mode, not test mode
+                if (isTaskMode) {
+                    // Prepare data for real-time bar chart
+                    const labels = prediction.map(pred => pred.className);
+                    const data = prediction.map(pred => (pred.probability * 100).toFixed(2));
 
-                // Update the real-time bar chart with current probabilities
-                updateBarChart(labels, data);
+                    // Update the real-time bar chart with current probabilities
+                    updateBarChart(labels, data);
 
-                // Track durations for classes exceeding 80% similarity
-                // Find all classes with probability >= 0.8
-                const highConfidencePredictions = prediction.filter(pred => pred.probability >= 0.8);
+                    // Track durations for classes exceeding 80% similarity
+                    // Find all classes with probability >= 0.8
+                    const highConfidencePredictions = prediction.filter(pred => pred.probability >= 0.8);
 
-                if (highConfidencePredictions.length > 0) {
-                    // Select the prediction with the highest probability
-                    const topHighConfidence = highConfidencePredictions.reduce((max, pred) => pred.probability > max.probability ? pred : max, highConfidencePredictions[0]);
+                    if (highConfidencePredictions.length > 0) {
+                        // Select the prediction with the highest probability
+                        const topHighConfidence = highConfidencePredictions.reduce((max, pred) => pred.probability > max.probability ? pred : max, highConfidencePredictions[0]);
 
-                    // Increment duration for the top high confidence class
-                    if (classDurations.hasOwnProperty(topHighConfidence.className)) {
-                        classDurations[topHighConfidence.className] += 0.1; // Assuming loop runs every 100ms
+                        // Increment duration for the top high confidence class
+                        if (classDurations.hasOwnProperty(topHighConfidence.className)) {
+                            classDurations[topHighConfidence.className] += 0.1; // Assuming loop runs every 100ms
+                        } else {
+                            // Initialize if not present
+                            classDurations[topHighConfidence.className] = 0.1;
+                        }
+
+                        // Update overlay with current class and probability
+                        currentClass.textContent = `Class: ${topHighConfidence.className}`;
+                        currentProbability.textContent = `Probability: ${(topHighConfidence.probability * 100).toFixed(2)}%`;
+
+                        // Provide feedback message based on probability
+                        if (topHighConfidence.probability >= 0.8) {
+                            feedbackMessage.textContent = "Great Pose!";
+                            feedbackMessage.style.color = "green";
+                        } else {
+                            feedbackMessage.textContent = "Adjust Your Pose.";
+                            feedbackMessage.style.color = "red";
+                        }
+
+                        console.log(`Class "${topHighConfidence.className}" exceeded 80% similarity. Total duration: ${classDurations[topHighConfidence.className].toFixed(2)}s`);
                     } else {
-                        // Initialize if not present
-                        classDurations[topHighConfidence.className] = 0.1;
+                        // If no class exceeds 80%, reset feedback
+                        currentClass.textContent = `Class: N/A`;
+                        currentProbability.textContent = `Probability: 0%`;
+                        feedbackMessage.textContent = "No Pose Detected.";
+                        feedbackMessage.style.color = "orange";
                     }
-
-                    // Update overlay with current class and probability
-                    currentClass.textContent = `Class: ${topHighConfidence.className}`;
-                    currentProbability.textContent = `Probability: ${(topHighConfidence.probability * 100).toFixed(2)}%`;
-
-                    // Provide feedback message based on probability
-                    if (topHighConfidence.probability >= 0.8) {
-                        feedbackMessage.textContent = "Great Pose!";
-                        feedbackMessage.style.color = "green";
-                    } else {
-                        feedbackMessage.textContent = "Adjust Your Pose.";
-                        feedbackMessage.style.color = "red";
-                    }
-
-                    console.log(`Class "${topHighConfidence.className}" exceeded 80% similarity. Total duration: ${classDurations[topHighConfidence.className].toFixed(2)}s`);
                 } else {
-                    // If no class exceeds 80%, reset feedback
+                    // In test mode, we just want to draw the pose without updating the chart
+                    // or showing probability information
                     currentClass.textContent = `Class: N/A`;
                     currentProbability.textContent = `Probability: 0%`;
-                    feedbackMessage.textContent = "No Pose Detected.";
-                    feedbackMessage.style.color = "orange";
+                    feedbackMessage.textContent = "";
                 }
 
                 // Draw the pose
@@ -552,12 +565,16 @@ HTML_PAGE = """
 
         // Event Listener for Test Webcam Button
         testWebcamButton.addEventListener('click', async () => {
+            isTaskMode = false; // Set to test mode, not task mode
             const testSuccess = await setupWebcam();
             if (testSuccess) {
                 testWebcamButton.classList.add('hidden');
                 stopTestWebcamButton.classList.remove('hidden');
                 feedback.textContent = "Webcam test running...";
                 feedback.className = "success";
+                
+                // Make sure bar chart container is hidden during test
+                barChartContainer.classList.add('hidden');
             }
         });
 
@@ -583,6 +600,9 @@ HTML_PAGE = """
 
             // Start the 5-second countdown
             startCountdown(5, countdownElement, async () => {
+                // Set to task mode
+                isTaskMode = true;
+                
                 // Initialize webcam for the task
                 const webcamSetupSuccess = await setupWebcam();
                 if (!webcamSetupSuccess) {
@@ -592,6 +612,9 @@ HTML_PAGE = """
                 // Show task section elements
                 startTaskButton.classList.add('hidden');
                 endTaskButton.classList.remove('hidden');
+                
+                // Show bar chart container in task mode
+                barChartContainer.classList.remove('hidden');
 
                 // Start the timer
                 taskStartTime = performance.now();
@@ -618,6 +641,9 @@ HTML_PAGE = """
 
         // Event Listener for End Task Button
         endTaskButton.addEventListener('click', () => {
+            // Reset task mode flag
+            isTaskMode = false;
+            
             // Stop the webcam
             if (webcam) {
                 webcam.stop();
@@ -656,12 +682,16 @@ HTML_PAGE = """
         // Event Listener for Restart Button
         restartButton.addEventListener('click', () => {
             // Reset variables
+            isTaskMode = false;
             summarySection.style.display = 'none';
             taskSection.classList.add('hidden');
             startTaskButton.classList.remove('hidden');
             endTaskButton.classList.add('hidden');
             taskTimer.textContent = "Time: 0.00s";
             feedbackMessage.textContent = "";
+
+            // Hide bar chart container
+            barChartContainer.classList.add('hidden');
 
             // Reset real-time bar chart
             if (barChart) {
