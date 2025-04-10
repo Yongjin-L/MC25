@@ -93,7 +93,7 @@ HTML_PAGE = """
         }
         #bar-chart-container {
             margin-top: 20px;
-            width: 120px; /* Made even narrower for better fit */
+            width: 320px; 
             height: 240px;
         }
         #summary-section {
